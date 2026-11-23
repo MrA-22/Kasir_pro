@@ -1,0 +1,51 @@
+package com.example.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// Dark Espresso / Amber Palette (Screenshot 1)
+val DarkBackground = Color(0xFF161413)
+val DarkSurface = Color(0xFF221E1B)
+val DarkSurfaceVariant = Color(0xFF2B2623)
+val DarkSubCard = Color(0xFF1C1917)
+val DarkPrimary = Color(0xFFE2542B)
+val DarkPrimaryVariant = Color(0xFFC7431D)
+val DarkPrimaryLight = Color(0xFFFF9E80)
+val DarkOnBackground = Color(0xFFF7ECE8)
+val DarkOnSurface = Color(0xFFE8DFDB)
+val DarkOnSurfaceVariant = Color(0xFFA59A94)
+val DarkBorder = Color(0xFF38312C)
+
+// Sage Olive Green Palette (Screenshot 2)
+val SageBackground = Color(0xFF49584B)
+val SageSurface = Color(0xFF38453A)
+val SageSurfaceVariant = Color(0xFF2E3930)
+val SageSubCard = Color(0xFF2B352D)
+val SagePrimary = Color(0xFF6F9B73)
+val SagePrimaryVariant = Color(0xFF5A845E)
+val SagePrimaryLight = Color(0xFFE8DEC8)
+val SageOnBackground = Color(0xFFF1F5EB)
+val SageOnSurface = Color(0xFFE5EDE0)
+val SageOnSurfaceVariant = Color(0xFFADC0A7)
+val SageBorder = Color(0xFF4C5D4F)
+
+// Clean Light Palette
+val LightBackground = Color(0xFFF7F8FA)
+val LightSurface = Color(0xFFFFFFFF)
+val LightSurfaceVariant = Color(0xFFF0F2F5)
+val LightSubCard = Color(0xFFF4F5F7)
+val LightPrimary = Color(0xFFE2542B)
+val LightPrimaryVariant = Color(0xFFBF401A)
+val LightPrimaryLight = Color(0xFFFF8A65)
+val LightOnBackground = Color(0xFF1E2124)
+val LightOnSurface = Color(0xFF2B2E33)
+val LightOnSurfaceVariant = Color(0xFF6C757D)
+val LightBorder = Color(0xFFE2E6EA)
+
+// Universal Semantic Colors
+val StatusSuccess = Color(0xFF38B000)
+val StatusSuccessBg = Color(0xFF1E3A20)
+val StatusWarning = Color(0xFFFF9F1C)
+val StatusWarningBg = Color(0xFF3D2E14)
+val StatusError = Color(0xFFE63946)
+val StatusQris = Color(0xFFE87A24)
+val StatusTunai = Color(0xFF2EC4B6)

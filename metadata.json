@@ -1,0 +1,6 @@
+{
+  "name": "Kasir Pro",
+  "description": "Aplikasi POS kasir pintar serbaguna untuk semua jenis usaha toko & warung dengan manajemen stok, laporan penjualan harian/mingguan/bulanan, ekspor PDF/CSV, QRIS, cetak struk Bluetooth Thermal & foto, serta tema gelap dan terang.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
