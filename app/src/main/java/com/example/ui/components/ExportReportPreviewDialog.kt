@@ -40,7 +40,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -57,6 +56,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,32 +70,49 @@ import com.example.data.model.StoreConfig
 import com.example.data.model.TransactionWithItems
 import com.example.util.CurrencyUtils
 
+/**
+ * Pilihan format file ekspor laporan.
+ */
 enum class ExportFileFormat(
     val label: String,
-    val extensionLabel: String,
-    val subtitle: String,
-    val badgeColor: Color
+    val badgeLabel: String,
+    val description: String,
+    val icon: ImageVector
 ) {
     EXCEL(
         label = "Excel (.xlsx)",
-        extensionLabel = "XLSX Multi-Sheet",
-        subtitle = "3 Sheet rapi: Ringkasan & Tabel, Rincian Item, Produk Terlaris + Rumus SUM",
-        badgeColor = Color(0xFF1D6F42)
-    ),
-    CSV(
-        label = "CSV (.csv)",
-        extensionLabel = "UTF-8 Semicolon",
-        subtitle = "Pemisah titik-koma rapi untuk Excel Mobile & Google Sheets tanpa angka desimal .0",
-        badgeColor = Color(0xFF0277BD)
+        badgeLabel = "XLSX Rapi",
+        description = "3 Sheet: Ringkasan, Transaksi, Terlaris + Rumus SUM",
+        icon = Icons.Default.GridOn
     ),
     PDF(
         label = "PDF (.pdf)",
-        extensionLabel = "Siap Cetak A4",
-        subtitle = "Dokumen laporan rapi siap bagikan atau arsip cetak",
-        badgeColor = Color(0xFFC62828)
+        badgeLabel = "Siap Cetak A4",
+        description = "Format cetak resmi / kirim dokumen ke WhatsApp",
+        icon = Icons.Default.PictureAsPdf
+    ),
+    CSV(
+        label = "CSV (.csv)",
+        badgeLabel = "UTF-8 Standar",
+        description = "Format ringkas untuk Excel Mobile & Google Sheets",
+        icon = Icons.Default.TableChart
     )
 }
 
+// Skema Warna Hijau Spreadsheet Klasik (Independen dari tema aplikasi)
+private val ExcelPrimaryGreen = Color(0xFF1D6F42)
+private val ExcelDeepGreen = Color(0xFF0E5A30)
+private val ExcelSoftMint = Color(0xFFE8F5E9)
+private val ExcelCardBg = Color(0xFFF6FAF7)
+private val ExcelBorderGreen = Color(0xFFC8E6C9)
+private val ExcelTextDark = Color(0xFF142417)
+private val ExcelTextMuted = Color(0xFF4A6150)
+private val ExcelZebraOdd = Color(0xFFF4F9F5)
+
+/**
+ * Dialog Pratinjau Ekspor Laporan bernuansa hijau spreadsheet klasik (Excel style).
+ * Tampilan dirancang konsisten dalam warna hijau elegan tanpa terpengaruh tema aplikasi.
+ */
 @Composable
 fun ExportReportPreviewDialog(
     initialFormat: ExportFileFormat,
@@ -109,8 +126,6 @@ fun ExportReportPreviewDialog(
     var selectedFormat by remember(initialFormat) { mutableStateOf(initialFormat) }
 
     val totalOmset = remember(transactions) { transactions.sumOf { it.transaction.totalAmount } }
-    val totalReceived = remember(transactions) { transactions.sumOf { it.transaction.amountReceived } }
-    val totalChange = remember(transactions) { transactions.sumOf { it.transaction.changeAmount } }
     val totalItems = remember(transactions) { transactions.sumOf { it.items.sumOf { i -> i.quantity } } }
     val totalTunai = remember(transactions) {
         transactions.filter { it.transaction.paymentMethod == "TUNAI" }.sumOf { it.transaction.totalAmount }
@@ -139,362 +154,335 @@ fun ExportReportPreviewDialog(
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = 0.55f))
                 .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(horizontal = 12.dp, vertical = 14.dp),
+                .padding(horizontal = 12.dp, vertical = 12.dp),
             contentAlignment = Alignment.Center
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 960.dp)
-                    .heightIn(max = 820.dp),
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 8.dp
+                    .widthIn(max = 760.dp)
+                    .heightIn(max = 780.dp),
+                shape = RoundedCornerShape(20.dp),
+                color = Color.White,
+                tonalElevation = 6.dp
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // 1. Rich Emerald Store Banner Header
+                    // 1. Header Banner Hijau Emerald Elegan
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(
                                 Brush.horizontalGradient(
-                                    colors = listOf(Color(0xFF145A32), Color(0xFF1D6F42))
+                                    listOf(ExcelDeepGreen, ExcelPrimaryGreen)
                                 )
                             )
-                            .padding(horizontal = 18.dp, vertical = 16.dp)
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(
-                                    text = "Pratinjau & Ekspor Laporan",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.White.copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GridOn,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
                                 )
-                                Spacer(modifier = Modifier.height(2.dp))
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "${storeConfig.storeName.ifBlank { "KASIR PRO" }.uppercase()} • $reportTitle",
+                                    text = "Pratinjau Ekspor Laporan",
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "${storeConfig.storeName.ifBlank { "KASIR PRO" }.uppercase()} • Periode: $reportTitle",
                                     fontSize = 12.sp,
-                                    color = Color(0xFFD5F0DE),
+                                    color = Color.White.copy(alpha = 0.9f),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-
                             IconButton(
                                 onClick = onDismiss,
                                 modifier = Modifier
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("export_preview_close_button")
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.2f))
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
-                                    contentDescription = "Tutup Pratinjau",
-                                    tint = Color.White
+                                    contentDescription = "Tutup",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
                     }
 
-                    // 2. Scrollable Body: Format Selector + KPI + Formatted Spreadsheet Table Preview
+                    // 2. Isi Scrollable: Pilihan Format + Ringkasan KPI + Tabel Spreadsheet Hijau
                     LazyColumn(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        contentPadding = PaddingValues(vertical = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                            .background(Color(0xFFFAFCFA)),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        item {
-                            Text(
-                                text = "Pilih Format Ekspor",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                                val wide = maxWidth >= 560.dp
-                                if (wide) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        ExportFormatOptionCard(
-                                            format = ExportFileFormat.EXCEL,
-                                            icon = Icons.Default.GridOn,
-                                            selected = selectedFormat == ExportFileFormat.EXCEL,
-                                            onClick = { selectedFormat = ExportFileFormat.EXCEL },
-                                            modifier = Modifier.weight(1f).testTag("preview_format_excel")
-                                        )
-                                        ExportFormatOptionCard(
-                                            format = ExportFileFormat.CSV,
-                                            icon = Icons.Default.TableChart,
-                                            selected = selectedFormat == ExportFileFormat.CSV,
-                                            onClick = { selectedFormat = ExportFileFormat.CSV },
-                                            modifier = Modifier.weight(1f).testTag("preview_format_csv")
-                                        )
-                                        ExportFormatOptionCard(
-                                            format = ExportFileFormat.PDF,
-                                            icon = Icons.Default.PictureAsPdf,
-                                            selected = selectedFormat == ExportFileFormat.PDF,
-                                            onClick = { selectedFormat = ExportFileFormat.PDF },
-                                            modifier = Modifier.weight(1f).testTag("preview_format_pdf")
-                                        )
-                                    }
-                                } else {
-                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            ExportFormatOptionCard(
-                                                format = ExportFileFormat.EXCEL,
-                                                icon = Icons.Default.GridOn,
-                                                selected = selectedFormat == ExportFileFormat.EXCEL,
-                                                onClick = { selectedFormat = ExportFileFormat.EXCEL },
-                                                modifier = Modifier.weight(1f).testTag("preview_format_excel")
-                                            )
-                                            ExportFormatOptionCard(
-                                                format = ExportFileFormat.CSV,
-                                                icon = Icons.Default.TableChart,
-                                                selected = selectedFormat == ExportFileFormat.CSV,
-                                                onClick = { selectedFormat = ExportFileFormat.CSV },
-                                                modifier = Modifier.weight(1f).testTag("preview_format_csv")
-                                            )
-                                        }
-                                        ExportFormatOptionCard(
-                                            format = ExportFileFormat.PDF,
-                                            icon = Icons.Default.PictureAsPdf,
-                                            selected = selectedFormat == ExportFileFormat.PDF,
-                                            onClick = { selectedFormat = ExportFileFormat.PDF },
-                                            modifier = Modifier.fillMaxWidth().testTag("preview_format_pdf")
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Summary KPI Strip matching Spreadsheet Ringkasan
-                        item {
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = Color(0xFFF3F8F4),
-                                border = BorderStroke(1.dp, Color(0xFFD0E3D6))
-                            ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "RINGKASAN PENJUALAN",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            color = Color(0xFF1B5E20),
-                                            letterSpacing = 0.8.sp
-                                        )
-                                        Text(
-                                            text = selectedFormat.extensionLabel,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = selectedFormat.badgeColor,
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(selectedFormat.badgeColor.copy(alpha = 0.12f))
-                                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = selectedFormat.subtitle,
-                                        fontSize = 11.sp,
-                                        color = Color(0xFF3E5647)
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        PreviewKpiTile(
-                                            label = "Total Omset",
-                                            value = CurrencyUtils.formatRupiah(totalOmset),
-                                            sub = "${transactions.size} Struk",
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        PreviewKpiTile(
-                                            label = "Laba Bersih",
-                                            value = CurrencyUtils.formatRupiah(totalLaba),
-                                            sub = "$totalItems Porsi",
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        PreviewKpiTile(
-                                            label = "Tunai",
-                                            value = CurrencyUtils.formatRupiah(totalTunai),
-                                            sub = null,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        PreviewKpiTile(
-                                            label = "QRIS",
-                                            value = CurrencyUtils.formatRupiah(totalQris),
-                                            sub = null,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Formatted Spreadsheet Table Preview (mirrors exact Excel / CSV columns cleanly)
+                        // Pilih Format Berkas
                         item {
                             Column(modifier = Modifier.fillMaxWidth()) {
+                                Text(
+                                    text = "Pilih Format Berkas",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ExcelTextDark
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Text(
-                                        text = "Pratinjau Tabel Transaksi",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                    ExportFileFormat.values().forEach { fmt ->
+                                        FormatOptionCard(
+                                            format = fmt,
+                                            isSelected = selectedFormat == fmt,
+                                            modifier = Modifier.weight(1f),
+                                            onClick = { selectedFormat = fmt }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Ringkasan KPI Hijau
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(ExcelCardBg)
+                                    .border(BorderStroke(1.dp, ExcelBorderGreen), RoundedCornerShape(14.dp))
+                                    .padding(12.dp)
+                            ) {
+                                Text(
+                                    text = "Ringkasan Penjualan",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ExcelDeepGreen
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    GreenKpiPill(
+                                        title = "Total Omset",
+                                        value = CurrencyUtils.formatRupiah(totalOmset),
+                                        modifier = Modifier.weight(1f)
                                     )
-                                    Text(
-                                        text = "Geser tabel ke kanan ↔",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    GreenKpiPill(
+                                        title = "Total Transaksi",
+                                        value = "${transactions.size} Struk",
+                                        modifier = Modifier.weight(1f)
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    GreenKpiPill(
+                                        title = "Item Terjual",
+                                        value = "$totalItems Porsi/Pcs",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    GreenKpiPill(
+                                        title = "Estimasi Laba",
+                                        value = CurrencyUtils.formatRupiah(totalLaba),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
 
-                                if (transactions.isEmpty()) {
-                                    Surface(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(14.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                                    ) {
-                                        Text(
-                                            text = "Belum ada transaksi pada periode ini untuk pratinjau tabel.",
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(18.dp),
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                } else {
-                                    val hScroll = rememberScrollState()
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = BorderStroke(1.dp, Color(0xFFC8D7CE)),
-                                        color = Color.White
-                                    ) {
-                                        Column(
+                        // Pratinjau Lembar Kerja Spreadsheet Hijau
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color.White)
+                                    .border(BorderStroke(1.dp, ExcelBorderGreen), RoundedCornerShape(14.dp))
+                                    .padding(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(ExcelPrimaryGreen)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Pratinjau Lembar Kerja (Excel Style)",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ExcelTextDark
+                                    )
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    Text(
+                                        text = "${transactions.size} Baris Data",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = ExcelPrimaryGreen
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                // Spreadsheet Table Horizontal Scroll
+                                val scrollState = rememberScrollState()
+                                val colNoWidth = 44.dp
+                                val colTimeWidth = 84.dp
+                                val colInvoiceWidth = 110.dp
+                                val colMethodWidth = 84.dp
+                                val colItemsWidth = 140.dp
+                                val colTotalWidth = 110.dp
+
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .border(BorderStroke(1.dp, ExcelBorderGreen), RoundedCornerShape(8.dp))
+                                        .horizontalScroll(scrollState)
+                                ) {
+                                    Column {
+                                        // Header Baris Excel Hijau
+                                        Row(
                                             modifier = Modifier
-                                                .fillMaxWidth()
-                                                .horizontalScroll(hScroll)
+                                                .background(ExcelPrimaryGreen)
+                                                .padding(vertical = 8.dp)
                                         ) {
-                                            // Table Header Row (Forest Emerald)
-                                            Row(
-                                                modifier = Modifier
-                                                    .background(Color(0xFF1D6F42))
-                                                    .padding(vertical = 10.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                TableCellText("No", 44.dp, Color.White, FontWeight.Bold, TextAlign.Center)
-                                                TableCellText("No Nota", 155.dp, Color.White, FontWeight.Bold)
-                                                TableCellText("Waktu", 125.dp, Color.White, FontWeight.Bold, TextAlign.Center)
-                                                TableCellText("Metode", 78.dp, Color.White, FontWeight.Bold, TextAlign.Center)
-                                                TableCellText("Pelanggan", 110.dp, Color.White, FontWeight.Bold)
-                                                TableCellText("Rincian Produk / Menu", 230.dp, Color.White, FontWeight.Bold)
-                                                TableCellText("Total (Rp)", 115.dp, Color.White, FontWeight.Bold, TextAlign.End)
-                                                TableCellText("Tunai (Rp)", 115.dp, Color.White, FontWeight.Bold, TextAlign.End)
-                                                TableCellText("Kembali", 105.dp, Color.White, FontWeight.Bold, TextAlign.End)
-                                            }
+                                            TableCellHeader("No", colNoWidth, TextAlign.Center)
+                                            TableCellHeader("Waktu", colTimeWidth, TextAlign.Center)
+                                            TableCellHeader("No Struk", colInvoiceWidth, TextAlign.Left)
+                                            TableCellHeader("Metode", colMethodWidth, TextAlign.Center)
+                                            TableCellHeader("Rincian Item", colItemsWidth, TextAlign.Left)
+                                            TableCellHeader("Total", colTotalWidth, TextAlign.Right)
+                                        }
 
-                                            transactions.forEachIndexed { idx, txWithItems ->
+                                        if (transactions.isEmpty()) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(24.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "Belum ada riwayat transaksi pada periode ini.",
+                                                    fontSize = 12.sp,
+                                                    color = ExcelTextMuted
+                                                )
+                                            }
+                                        } else {
+                                            transactions.take(25).forEachIndexed { idx, txWithItems ->
                                                 val tx = txWithItems.transaction
-                                                val rowBg = if (idx % 2 == 1) Color(0xFFF6FAF7) else Color.White
-                                                val itemsText = txWithItems.items.joinToString("\n") {
-                                                    "• ${it.quantity}x ${it.productName}"
+                                                val isEven = idx % 2 == 0
+                                                val rowBg = if (isEven) Color.White else ExcelZebraOdd
+                                                val itemSummary = txWithItems.items.joinToString(", ") {
+                                                    "${it.productName} (${it.quantity})"
                                                 }.ifBlank { "-" }
 
                                                 Row(
                                                     modifier = Modifier
                                                         .background(rowBg)
-                                                        .padding(vertical = 8.dp),
+                                                        .border(
+                                                            BorderStroke(
+                                                                0.5.dp,
+                                                                Color(0xFFE0EAE2)
+                                                            )
+                                                        )
+                                                        .padding(vertical = 7.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    TableCellText("${idx + 1}", 44.dp, Color(0xFF26322B), FontWeight.Medium, TextAlign.Center)
-                                                    TableCellText(tx.invoiceNumber, 155.dp, Color(0xFF1F2421), FontWeight.SemiBold)
-                                                    TableCellText(CurrencyUtils.formatDateTime(tx.timestamp), 125.dp, Color(0xFF45524B), FontWeight.Normal, TextAlign.Center)
-                                                    Box(
-                                                        modifier = Modifier.width(78.dp),
-                                                        contentAlignment = Alignment.Center
-                                                    ) {
-                                                        val isQris = tx.paymentMethod == "QRIS"
-                                                        Text(
-                                                            text = tx.paymentMethod,
-                                                            fontSize = 10.sp,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = if (isQris) Color(0xFF0D47A1) else Color(0xFF1B5E20),
-                                                            modifier = Modifier
-                                                                .clip(RoundedCornerShape(6.dp))
-                                                                .background(if (isQris) Color(0xFFE3F2FD) else Color(0xFFE8F5E9))
-                                                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                                                        )
-                                                    }
-                                                    TableCellText(tx.customerName.ifBlank { "-" }, 110.dp, Color(0xFF333D37), FontWeight.Normal)
-                                                    TableCellText(itemsText, 230.dp, Color(0xFF26322B), FontWeight.Normal)
-                                                    TableCellText(CurrencyUtils.formatRupiah(tx.totalAmount), 115.dp, Color(0xFF145A32), FontWeight.Bold, TextAlign.End)
-                                                    TableCellText(CurrencyUtils.formatRupiah(tx.amountReceived), 115.dp, Color(0xFF333D37), FontWeight.Normal, TextAlign.End)
-                                                    TableCellText(CurrencyUtils.formatRupiah(tx.changeAmount), 105.dp, Color(0xFF333D37), FontWeight.Normal, TextAlign.End)
+                                                    TableCellData("${idx + 1}", colNoWidth, TextAlign.Center)
+                                                    TableCellData(CurrencyUtils.formatTimeOnly(tx.timestamp), colTimeWidth, TextAlign.Center)
+                                                    TableCellData(tx.invoiceNumber, colInvoiceWidth, TextAlign.Left, isMonospace = true)
+                                                    TableCellData(tx.paymentMethod, colMethodWidth, TextAlign.Center, isBadge = true)
+                                                    TableCellData(itemSummary, colItemsWidth, TextAlign.Left)
+                                                    TableCellData(CurrencyUtils.formatRupiah(tx.totalAmount), colTotalWidth, TextAlign.Right, isBold = true, isGreen = true)
                                                 }
-                                                HorizontalDivider(color = Color(0xFFE3ECE6), thickness = 1.dp)
                                             }
 
-                                            // Warm Amber Grand Total Footer Row
+                                            // Total Footer Row
                                             Row(
                                                 modifier = Modifier
-                                                    .background(Color(0xFFFFF3E0))
-                                                    .padding(vertical = 10.dp),
+                                                    .background(ExcelSoftMint)
+                                                    .border(BorderStroke(1.dp, ExcelBorderGreen))
+                                                    .padding(vertical = 8.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                TableCellText("", 44.dp, Color(0xFF4A2C00), FontWeight.Bold)
-                                                TableCellText("TOTAL KESELURUHAN", 155.dp, Color(0xFF4A2C00), FontWeight.ExtraBold)
-                                                TableCellText("${transactions.size} Struk", 125.dp, Color(0xFF4A2C00), FontWeight.Bold, TextAlign.Center)
-                                                TableCellText("", 78.dp, Color(0xFF4A2C00), FontWeight.Bold)
-                                                TableCellText("", 110.dp, Color(0xFF4A2C00), FontWeight.Bold)
-                                                TableCellText("$totalItems item terjual", 230.dp, Color(0xFF6D4C00), FontWeight.SemiBold)
-                                                TableCellText(CurrencyUtils.formatRupiah(totalOmset), 115.dp, Color(0xFF4A2C00), FontWeight.ExtraBold, TextAlign.End)
-                                                TableCellText(CurrencyUtils.formatRupiah(totalReceived), 115.dp, Color(0xFF4A2C00), FontWeight.Bold, TextAlign.End)
-                                                TableCellText(CurrencyUtils.formatRupiah(totalChange), 105.dp, Color(0xFF4A2C00), FontWeight.Bold, TextAlign.End)
+                                                Box(
+                                                    modifier = Modifier
+                                                        .width(colNoWidth + colTimeWidth + colInvoiceWidth + colMethodWidth + colItemsWidth)
+                                                        .padding(horizontal = 8.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "TOTAL KESELURUHAN OMSET",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = ExcelDeepGreen
+                                                    )
+                                                }
+                                                Box(
+                                                    modifier = Modifier
+                                                        .width(colTotalWidth)
+                                                        .padding(horizontal = 8.dp),
+                                                    contentAlignment = Alignment.CenterEnd
+                                                ) {
+                                                    Text(
+                                                        text = CurrencyUtils.formatRupiah(totalOmset),
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        color = ExcelDeepGreen
+                                                    )
+                                                }
                                             }
                                         }
                                     }
+                                }
+
+                                if (transactions.size > 25) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = "* Pratinjau menampilkan 25 transaksi pertama. File hasil ekspor menyertakan seluruh ${transactions.size} transaksi lengkap.",
+                                        fontSize = 10.5.sp,
+                                        color = ExcelTextMuted
+                                    )
                                 }
                             }
                         }
                     }
 
-                    // 3. Sticky Bottom Export CTA Bar
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    // 3. Tombol Aksi Bawah
+                    HorizontalDivider(color = Color(0xFFE2EBE4))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .background(Color.White)
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -502,35 +490,39 @@ fun ExportReportPreviewDialog(
                         OutlinedButton(
                             onClick = onDismiss,
                             modifier = Modifier
-                                .height(48.dp)
-                                .testTag("export_preview_cancel_button"),
-                            shape = RoundedCornerShape(12.dp)
+                                .weight(1f)
+                                .minimumInteractiveComponentSize(),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color(0xFFD0DDD3)),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = ExcelTextMuted
+                            )
                         ) {
-                            Text("Batal", fontWeight = FontWeight.SemiBold)
+                            Text("Batal", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
 
                         Button(
                             onClick = { onConfirmExport(selectedFormat) },
                             modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("export_preview_confirm_button"),
+                                .weight(1.6f)
+                                .minimumInteractiveComponentSize()
+                                .testTag("confirm_export_preview_button"),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = selectedFormat.badgeColor,
+                                containerColor = ExcelPrimaryGreen,
                                 contentColor = Color.White
                             )
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Share,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "Ekspor & Bagikan ${selectedFormat.label}",
-                                fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -543,139 +535,148 @@ fun ExportReportPreviewDialog(
 }
 
 @Composable
-private fun ExportFormatOptionCard(
+private fun FormatOptionCard(
     format: ExportFileFormat,
-    icon: ImageVector,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    isSelected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
 ) {
-    Surface(
+    val borderColor = if (isSelected) ExcelPrimaryGreen else Color(0xFFD5E3D8)
+    val bgColor = if (isSelected) ExcelSoftMint else Color.White
+
+    Column(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        color = if (selected) format.badgeColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        border = BorderStroke(
-            width = if (selected) 2.dp else 1.dp,
-            color = if (selected) format.badgeColor else MaterialTheme.colorScheme.outlineVariant
-        )
+            .clip(RoundedCornerShape(12.dp))
+            .background(bgColor)
+            .border(BorderStroke(if (isSelected) 1.5.dp else 1.dp, borderColor), RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.Center
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .background(format.badgeColor.copy(alpha = 0.16f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = format.badgeColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = format.label,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = format.extensionLabel,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            if (selected) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Terpilih",
-                    tint = format.badgeColor,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+            Icon(
+                imageVector = format.icon,
+                contentDescription = null,
+                tint = if (isSelected) ExcelPrimaryGreen else ExcelTextMuted,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = format.badgeLabel,
+                fontSize = 11.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                color = if (isSelected) ExcelDeepGreen else ExcelTextDark,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
 
 @Composable
-private fun PreviewKpiTile(
-    label: String,
+private fun GreenKpiPill(
+    title: String,
     value: String,
-    sub: String?,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
-        color = Color.White,
-        border = BorderStroke(1.dp, Color(0xFFDCE8DF))
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White)
+            .border(BorderStroke(1.dp, Color(0xFFE2EBE4)), RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+        Column {
             Text(
-                text = label,
-                fontSize = 11.sp,
-                color = Color(0xFF53695A),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                text = title,
+                fontSize = 10.5.sp,
+                color = ExcelTextMuted,
+                fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = value,
                 fontSize = 13.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFF145A32),
+                color = ExcelDeepGreen,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (sub != null) {
-                Text(
-                    text = sub,
-                    fontSize = 10.sp,
-                    color = Color(0xFF6A7D70),
-                    maxLines = 1
-                )
-            }
         }
     }
 }
 
 @Composable
-private fun TableCellText(
-    text: String,
-    width: Dp,
-    color: Color,
-    fontWeight: FontWeight,
-    align: TextAlign = TextAlign.Start
-) {
-    Text(
-        text = text,
-        fontSize = 11.sp,
-        fontWeight = fontWeight,
-        color = color,
-        textAlign = align,
-        lineHeight = 15.sp,
+private fun TableCellHeader(text: String, width: Dp, align: TextAlign) {
+    Box(
         modifier = Modifier
             .width(width)
-            .padding(horizontal = 8.dp)
-    )
+            .padding(horizontal = 6.dp),
+        contentAlignment = when (align) {
+            TextAlign.Right -> Alignment.CenterEnd
+            TextAlign.Center -> Alignment.Center
+            else -> Alignment.CenterStart
+        }
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = align
+        )
+    }
+}
+
+@Composable
+private fun TableCellData(
+    text: String,
+    width: Dp,
+    align: TextAlign,
+    isBold: Boolean = false,
+    isGreen: Boolean = false,
+    isMonospace: Boolean = false,
+    isBadge: Boolean = false
+) {
+    Box(
+        modifier = Modifier
+            .width(width)
+            .padding(horizontal = 6.dp),
+        contentAlignment = when (align) {
+            TextAlign.Right -> Alignment.CenterEnd
+            TextAlign.Center -> Alignment.Center
+            else -> Alignment.CenterStart
+        }
+    ) {
+        if (isBadge) {
+            val isQris = text.contains("QRIS", ignoreCase = true)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (isQris) Color(0xFFE3F2FD) else ExcelSoftMint)
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = text,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isQris) Color(0xFF0D47A1) else ExcelDeepGreen
+                )
+            }
+        } else {
+            Text(
+                text = text,
+                color = if (isGreen) ExcelPrimaryGreen else ExcelTextDark,
+                fontSize = 11.sp,
+                fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
+                fontFamily = if (isMonospace) FontFamily.Monospace else FontFamily.Default,
+                textAlign = align,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
 }

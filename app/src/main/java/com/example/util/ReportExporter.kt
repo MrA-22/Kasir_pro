@@ -241,16 +241,18 @@ object ReportExporter {
         transactions: List<TransactionWithItems>,
         products: List<Product> = emptyList()
     ) {
+        val themeMode = storeConfig.themeMode.uppercase()
         val sheet1Xml = buildSummaryAndTransactionsSheetXml(reportTitle, storeConfig, transactions, products)
         val sheet2Xml = buildItemDetailsSheetXml(reportTitle, storeConfig, transactions)
         val sheet3Xml = buildTopProductsSheetXml(reportTitle, storeConfig, transactions)
+        val stylesXml = getStylesXml(themeMode)
 
         ZipOutputStream(outputStream).use { zos ->
             putZipEntry(zos, "[Content_Types].xml", CONTENT_TYPES_XML)
             putZipEntry(zos, "_rels/.rels", ROOT_RELS_XML)
             putZipEntry(zos, "xl/workbook.xml", WORKBOOK_XML)
             putZipEntry(zos, "xl/_rels/workbook.xml.rels", WORKBOOK_RELS_XML)
-            putZipEntry(zos, "xl/styles.xml", STYLES_XML)
+            putZipEntry(zos, "xl/styles.xml", stylesXml)
             putZipEntry(zos, "xl/worksheets/sheet1.xml", sheet1Xml)
             putZipEntry(zos, "xl/worksheets/sheet2.xml", sheet2Xml)
             putZipEntry(zos, "xl/worksheets/sheet3.xml", sheet3Xml)
@@ -934,43 +936,85 @@ object ReportExporter {
             val marginX = 36f
             val marginY = 42f
 
+            // PDF styling: Selalu putih bersih dengan aksen hijau emerald spreadsheet profesional (tidak terpengaruh tema)
+            val pageBgColor = Color.WHITE
+            val titleColor = Color.parseColor("#0E5A30")
+            val subtitleColor = Color.parseColor("#4A6150")
+            val summaryBgColor = Color.parseColor("#F1F8F4")
+            val tableHeaderBgColor = Color.parseColor("#1D6F42")
+            val tableHeaderTextColor = Color.WHITE
+            val rowBgEven = Color.WHITE
+            val rowBgOdd = Color.parseColor("#F6FAF7")
+            val textColor = Color.parseColor("#142417")
+            val textBoldColor = Color.parseColor("#0E5A30")
+            val amountColor = Color.parseColor("#1D6F42")
+            val lineColor = Color.parseColor("#D5E3D8")
+            val totalBgColor = Color.parseColor("#E8F5E9")
+            val totalTextColor = Color.parseColor("#0E5A30")
+
             // Paints
             val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.parseColor("#1B1A17")
+                color = titleColor
                 textSize = 17f
                 typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             }
             val subtitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.parseColor("#5F5B53")
+                color = subtitleColor
                 textSize = 10f
             }
             val headerBgPaint = Paint().apply {
-                color = Color.parseColor("#F4F1EA")
+                color = summaryBgColor
                 style = Paint.Style.FILL
             }
             val tableHeaderBgPaint = Paint().apply {
-                color = Color.parseColor("#EAE5DC")
+                color = tableHeaderBgColor
                 style = Paint.Style.FILL
             }
+            val tableHeaderTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = tableHeaderTextColor
+                textSize = 9.5f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            }
             val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.parseColor("#26231F")
+                color = textColor
                 textSize = 9f
             }
             val textBold = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.parseColor("#1B1A17")
+                color = textBoldColor
+                textSize = 9.5f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            }
+            val amountPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = amountColor
                 textSize = 9.5f
                 typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             }
             val linePaint = Paint().apply {
-                color = Color.parseColor("#DCD7CE")
+                color = lineColor
                 strokeWidth = 0.8f
+            }
+            val rowBgPaint = Paint().apply {
+                style = Paint.Style.FILL
+            }
+            val totalBgPaint = Paint().apply {
+                color = totalBgColor
+                style = Paint.Style.FILL
+            }
+            val totalTextBoldPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = totalTextColor
+                textSize = 9.5f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            }
+            val totalTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = totalTextColor
+                textSize = 9f
             }
 
             var currentPageNum = 1
             var pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, currentPageNum).create()
             var page = pdfDocument.startPage(pageInfo)
             var canvas = page.canvas
-            canvas.drawColor(Color.WHITE)
+            canvas.drawColor(pageBgColor)
             var y = marginY
 
             fun startNewPage() {
@@ -979,7 +1023,7 @@ object ReportExporter {
                 pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, currentPageNum).create()
                 page = pdfDocument.startPage(pageInfo)
                 canvas = page.canvas
-                canvas.drawColor(Color.WHITE)
+                canvas.drawColor(pageBgColor)
                 y = marginY
 
                 canvas.drawText(storeConfig.storeName.uppercase(), marginX, y, titlePaint)
@@ -988,12 +1032,12 @@ object ReportExporter {
                 y += 18f
 
                 canvas.drawRect(marginX, y, 559f, y + 20f, tableHeaderBgPaint)
-                canvas.drawText("No", 42f, y + 14f, textBold)
-                canvas.drawText("No Nota", 65f, y + 14f, textBold)
-                canvas.drawText("Waktu", 185f, y + 14f, textBold)
-                canvas.drawText("Metode", 260f, y + 14f, textBold)
-                canvas.drawText("Menu / Item", 320f, y + 14f, textBold)
-                canvas.drawText("Total", 495f, y + 14f, textBold)
+                canvas.drawText("No", 42f, y + 14f, tableHeaderTextPaint)
+                canvas.drawText("No Nota", 65f, y + 14f, tableHeaderTextPaint)
+                canvas.drawText("Waktu", 185f, y + 14f, tableHeaderTextPaint)
+                canvas.drawText("Metode", 260f, y + 14f, tableHeaderTextPaint)
+                canvas.drawText("Menu / Item", 320f, y + 14f, tableHeaderTextPaint)
+                canvas.drawText("Total", 495f, y + 14f, tableHeaderTextPaint)
                 y += 20f
             }
 
@@ -1021,12 +1065,12 @@ object ReportExporter {
 
             // 3. Table Header
             canvas.drawRect(marginX, y, 559f, y + 20f, tableHeaderBgPaint)
-            canvas.drawText("No", 42f, y + 14f, textBold)
-            canvas.drawText("No Nota", 65f, y + 14f, textBold)
-            canvas.drawText("Waktu", 185f, y + 14f, textBold)
-            canvas.drawText("Metode", 260f, y + 14f, textBold)
-            canvas.drawText("Menu / Item", 320f, y + 14f, textBold)
-            canvas.drawText("Total", 495f, y + 14f, textBold)
+            canvas.drawText("No", 42f, y + 14f, tableHeaderTextPaint)
+            canvas.drawText("No Nota", 65f, y + 14f, tableHeaderTextPaint)
+            canvas.drawText("Waktu", 185f, y + 14f, tableHeaderTextPaint)
+            canvas.drawText("Metode", 260f, y + 14f, tableHeaderTextPaint)
+            canvas.drawText("Menu / Item", 320f, y + 14f, tableHeaderTextPaint)
+            canvas.drawText("Total", 495f, y + 14f, tableHeaderTextPaint)
             y += 20f
 
             // 4. Rows (Dynamic Multi-page)
@@ -1047,6 +1091,10 @@ object ReportExporter {
                     startNewPage()
                 }
 
+                val rowBg = if (index % 2 == 1) rowBgOdd else rowBgEven
+                rowBgPaint.color = rowBg
+                canvas.drawRect(marginX, y, 559f, y + rowHeight, rowBgPaint)
+
                 canvas.drawText("${index + 1}", 42f, y + 13f, textPaint)
                 canvas.drawText(tx.invoiceNumber, 65f, y + 13f, textPaint)
                 canvas.drawText(CurrencyUtils.formatTimeOnly(tx.timestamp), 185f, y + 13f, textPaint)
@@ -1057,10 +1105,23 @@ object ReportExporter {
                 wrappedItemsLayout.draw(canvas)
                 canvas.restore()
 
-                canvas.drawText(CurrencyUtils.formatRupiah(tx.totalAmount), 495f, y + 13f, textBold)
+                canvas.drawText(CurrencyUtils.formatRupiah(tx.totalAmount), 495f, y + 13f, amountPaint)
 
                 y += rowHeight
                 canvas.drawLine(marginX, y, 559f, y, linePaint)
+            }
+
+            // 5. Grand Total Summary Row
+            if (transactions.isNotEmpty()) {
+                if (y + 24f > pageHeight - marginY) {
+                    startNewPage()
+                }
+                canvas.drawRect(marginX, y, 559f, y + 22f, totalBgPaint)
+                canvas.drawText("TOTAL KESELURUHAN", 65f, y + 15f, totalTextBoldPaint)
+                canvas.drawText("${transactions.size} Struk", 185f, y + 15f, totalTextPaint)
+                canvas.drawText("$totalItems item", 320f, y + 15f, totalTextPaint)
+                canvas.drawText(CurrencyUtils.formatRupiah(totalOmset), 495f, y + 15f, totalTextBoldPaint)
+                y += 24f
             }
 
             canvas.drawText("Halaman $currentPageNum / $currentPageNum", 260f, pageHeight - 20f, subtitlePaint)
@@ -1169,7 +1230,14 @@ object ReportExporter {
   <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>"""
 
-    private const val STYLES_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    private fun getStylesXml(themeMode: String = ""): String {
+        // Professional Excel Green Theme (selalu hijau klasik spreadsheet, konsisten & independen dari tema)
+        val primaryHex = "FF1D6F42"        // Rich Emerald Green
+        val primaryAltHex = "FF0E5A30"     // Deep Forest Green
+        val headerFontColor = "FF1D6F42"   // Dark Emerald Green text
+        val subLabelFill = "FFE8F5E9"      // Soft Mint Green pill background
+        val zebraFill = "FFF4F9F5"         // Soft alternate row zebra tint
+        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <numFmts count="1">
     <numFmt numFmtId="164" formatCode="&quot;Rp &quot;#,##0"/>
@@ -1178,20 +1246,20 @@ object ReportExporter {
     <font><sz val="11"/><color rgb="FF1F2421"/><name val="Calibri"/></font>
     <font><b/><sz val="15"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
     <font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
-    <font><b/><sz val="11"/><color rgb="FF1B5E20"/><name val="Calibri"/></font>
-    <font><sz val="10"/><color rgb="FF2E5238"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><color rgb="$headerFontColor"/><name val="Calibri"/></font>
+    <font><sz val="10"/><color rgb="$headerFontColor"/><name val="Calibri"/></font>
     <font><b/><sz val="11"/><color rgb="FF1F2421"/><name val="Calibri"/></font>
-    <font><b/><sz val="10"/><color rgb="FF1B5E20"/><name val="Calibri"/></font>
+    <font><b/><sz val="10"/><color rgb="$headerFontColor"/><name val="Calibri"/></font>
     <font><b/><sz val="10"/><color rgb="FF0D47A1"/><name val="Calibri"/></font>
   </fonts>
   <fills count="10">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FF145A32"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FF1D6F42"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFE8F5E9"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFF4FAF5"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFF7FAF8"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="$primaryAltHex"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="$primaryHex"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="$subLabelFill"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="$subLabelFill"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="$zebraFill"/><bgColor indexed="64"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FFE3F2FD"/><bgColor indexed="64"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FFFFF3E0"/><bgColor indexed="64"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/><bgColor indexed="64"/></patternFill></fill>
@@ -1206,10 +1274,10 @@ object ReportExporter {
       <diagonal/>
     </border>
     <border>
-      <left style="thin"><color rgb="FF145A32"/></left>
-      <right style="thin"><color rgb="FF145A32"/></right>
-      <top style="medium"><color rgb="FF145A32"/></top>
-      <bottom style="medium"><color rgb="FF145A32"/></bottom>
+      <left style="thin"><color rgb="$primaryHex"/></left>
+      <right style="thin"><color rgb="$primaryHex"/></right>
+      <top style="medium"><color rgb="$primaryHex"/></top>
+      <bottom style="medium"><color rgb="$primaryHex"/></bottom>
       <diagonal/>
     </border>
     <border>
@@ -1250,4 +1318,5 @@ object ReportExporter {
     <xf numFmtId="0" fontId="5" fillId="8" borderId="3" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
   </cellXfs>
 </styleSheet>"""
+    }
 }

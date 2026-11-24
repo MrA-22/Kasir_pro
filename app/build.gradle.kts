@@ -18,8 +18,8 @@ android {
     applicationId = "com.mrapro.ksrpro"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 31
+    versionName = "1.26.11.31"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

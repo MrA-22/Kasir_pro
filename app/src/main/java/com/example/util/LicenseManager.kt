@@ -49,6 +49,7 @@ object LicenseManager {
     private const val KEY_ACTIVATED_KEY = "activated_key"
     private const val KEY_SERVER_ACTIVATED_SIG = "server_activated_sig"
     private const val KEY_ADMIN_WA = "admin_wa_override"
+    private const val KEY_WEBHOOK_URL_OVERRIDE = "webhook_url_override"
 
     private val lock = Any()
 
@@ -349,6 +350,32 @@ object LicenseManager {
         }
     }
 
+    fun getCustomWebhookBaseUrl(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_WEBHOOK_URL_OVERRIDE, "")?.trim().orEmpty()
+    }
+
+    fun setCustomWebhookBaseUrl(context: Context, rawUrl: String): String? {
+        synchronized(lock) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (rawUrl.isBlank()) {
+                prefs.edit().remove(KEY_WEBHOOK_URL_OVERRIDE).commit()
+                return normalizeHttpsGatewayUrl(BuildConfig.WEBHOOK_BASE_URL)
+            }
+            val normalized = normalizeHttpsGatewayUrl(rawUrl) ?: return null
+            prefs.edit().putString(KEY_WEBHOOK_URL_OVERRIDE, normalized).commit()
+            return normalized
+        }
+    }
+
+    fun getEffectiveGatewayBaseUrl(context: Context? = null): String? {
+        val overrideUrl = context?.let { getCustomWebhookBaseUrl(it) }.orEmpty()
+        if (overrideUrl.isNotBlank()) {
+            normalizeHttpsGatewayUrl(overrideUrl)?.let { return it }
+        }
+        return normalizeHttpsGatewayUrl(BuildConfig.WEBHOOK_BASE_URL)
+    }
+
     fun resetTrialForAdminTesting(context: Context, nowMs: Long = System.currentTimeMillis()) {
         synchronized(lock) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -430,6 +457,8 @@ object LicenseManager {
     data class WebhookDispatchResult(
         val success: Boolean,
         val statusCode: Int = 0,
+        val activated: Boolean = false,
+        val status: String = "",
         val detail: String = ""
     )
 
@@ -448,19 +477,64 @@ object LicenseManager {
     )
 
     fun normalizeHttpsGatewayUrl(rawUrl: String): String? {
-        val trimmed = rawUrl.trim().trimEnd('/')
+        val trimmed = rawUrl.trim()
+            .trim('"', '\'')
+            .trim()
+            .trimEnd('/')
         if (trimmed.isBlank()) return null
+
         val candidate = if (trimmed.contains("://")) trimmed else "https://$trimmed"
-        return candidate.takeIf { it.startsWith("https://", ignoreCase = true) }
+        if (!candidate.startsWith("https://", ignoreCase = true)) return null
+
+        return try {
+            val uri = java.net.URI(candidate)
+            val host = uri.host?.trim().orEmpty()
+            if (host.isBlank()) return null
+
+            val portPart = if (uri.port > 0 && uri.port != 443) ":${uri.port}" else ""
+            var path = (uri.path ?: "").trimEnd('/')
+            val knownSuffixes = listOf(
+                "/api/license/request",
+                "/api/license/status",
+                "/api/license/session",
+                "/api/license/verify",
+                "/api/license",
+                "/admin",
+                "/health"
+            )
+            for (suffix in knownSuffixes) {
+                if (path.endsWith(suffix, ignoreCase = true)) {
+                    path = path.dropLast(suffix.length).trimEnd('/')
+                    break
+                }
+            }
+            "https://$host$portPart$path"
+        } catch (_: Exception) {
+            null
+        }
     }
 
-    fun buildSessionEndpoint(baseUrl: String): String = "${baseUrl.trimEnd('/')}/api/license/session"
+    fun buildHealthEndpoint(baseUrl: String): String = "${baseUrl.trimEnd('/')}/health"
     fun buildRequestEndpoint(baseUrl: String): String = "${baseUrl.trimEnd('/')}/api/license/request"
-    fun buildVerifyEndpoint(baseUrl: String): String = "${baseUrl.trimEnd('/')}/api/license/verify"
     fun buildStatusEndpoint(baseUrl: String): String = "${baseUrl.trimEnd('/')}/api/license/status"
 
-    fun getConfiguredGatewayHost(): String {
-        val normalized = normalizeHttpsGatewayUrl(BuildConfig.WEBHOOK_BASE_URL) ?: return ""
+    fun buildStatusQueryUrl(baseUrl: String, deviceId: String): String {
+        val normalizedId = extractDeviceIdFromText(deviceId) ?: deviceId.trim().uppercase()
+        val encodedId = java.net.URLEncoder.encode(normalizedId, "UTF-8")
+        return "${buildStatusEndpoint(baseUrl)}?device_id=$encodedId"
+    }
+
+    fun buildLicenseRequestPayload(deviceId: String, businessName: String): String {
+        val normalizedId = extractDeviceIdFromText(deviceId) ?: deviceId.trim().uppercase()
+        val cleanBusiness = businessName.trim().ifBlank { "-" }
+        return JSONObject().apply {
+            put("business_name", cleanBusiness)
+            put("device_id", normalizedId)
+        }.toString()
+    }
+
+    fun getConfiguredGatewayHost(context: Context? = null): String {
+        val normalized = getEffectiveGatewayBaseUrl(context) ?: return ""
         return try {
             java.net.URI(normalized).host.orEmpty()
         } catch (_: Exception) {
@@ -468,35 +542,43 @@ object LicenseManager {
         }
     }
 
-    fun isSilentWaGatewayConfigured(): Boolean {
-        val url = normalizeHttpsGatewayUrl(BuildConfig.WEBHOOK_BASE_URL) ?: return false
+    fun isSilentWaGatewayConfigured(context: Context? = null): Boolean {
+        val url = getEffectiveGatewayBaseUrl(context) ?: return false
         return url.isNotBlank() && !url.contains("example.com", ignoreCase = true)
     }
 
     /**
-     * Mengirim permintaan lisensi ke server webhook pribadi secara diam-diam menggunakan
-     * token sesi berumur pendek (/api/license/session -> /api/license/request).
-     * Tidak ada secret statis di APK dan Kode API (KPRO-...) dibuat 100% di server.
+     * Mengirim permintaan aktivasi perangkat ke server Go Webhook (/api/license/request)
+     * menggunakan payload {"business_name", "device_id"}. Tidak ada secret statis di APK.
      */
     suspend fun sendSilentLicenseRequestToAdminWa(
         deviceId: String,
         storeName: String,
         adminWaNumber: String,
-        packageName: String = "com.mrapro.ksrpro"
-    ): Boolean = sendSilentLicenseRequestDetailed(deviceId, storeName, adminWaNumber, packageName).success
+        packageName: String = "com.mrapro.ksrpro",
+        baseUrlOverride: String? = null
+    ): Boolean = sendSilentLicenseRequestDetailed(
+        deviceId = deviceId,
+        storeName = storeName,
+        adminWaNumber = adminWaNumber,
+        packageName = packageName,
+        baseUrlOverride = baseUrlOverride
+    ).success
 
     suspend fun sendSilentLicenseRequestDetailed(
         deviceId: String,
         storeName: String,
-        adminWaNumber: String,
-        packageName: String = "com.mrapro.ksrpro"
+        @Suppress("UNUSED_PARAMETER") adminWaNumber: String,
+        @Suppress("UNUSED_PARAMETER") packageName: String = "com.mrapro.ksrpro",
+        baseUrlOverride: String? = null
     ): WebhookDispatchResult = withContext(Dispatchers.IO) {
-        val baseUrl = normalizeHttpsGatewayUrl(BuildConfig.WEBHOOK_BASE_URL)
+        val rawBase = baseUrlOverride?.takeIf { it.isNotBlank() } ?: BuildConfig.WEBHOOK_BASE_URL
+        val baseUrl = normalizeHttpsGatewayUrl(rawBase)
             ?: return@withContext WebhookDispatchResult(
                 success = false,
                 detail = "WEBHOOK_BASE_URL harus berupa URL HTTPS yang valid."
             )
-        if (!isSilentWaGatewayConfigured()) {
+        if (baseUrl.contains("example.com", ignoreCase = true)) {
             return@withContext WebhookDispatchResult(
                 success = false,
                 detail = "WEBHOOK_BASE_URL belum dikonfigurasi."
@@ -511,85 +593,116 @@ object LicenseManager {
             )
         }
 
-        val cleanAdminWa = adminWaNumber.filter { it.isDigit() }.let { digits ->
-            if (digits.startsWith("0")) "62${digits.substring(1)}" else digits
-        }.ifBlank { DEFAULT_ADMIN_WA }
-
         val jsonMediaType = "application/json; charset=utf-8".toMediaType()
-        val nowMs = System.currentTimeMillis()
+        val payloadJson = buildLicenseRequestPayload(normalizedId, storeName)
+        val requestUrl = buildRequestEndpoint(baseUrl)
 
         return@withContext try {
-            // Langkah 1: Minta token sesi berumur pendek (single-use) dari server
-            val sessionPayload = JSONObject().apply {
-                put("deviceId", normalizedId)
-                put("device_id", normalizedId)
-                put("packageName", packageName)
-                put("timestamp", nowMs)
-            }
-            val sessionReq = Request.Builder()
-                .url(buildSessionEndpoint(baseUrl))
-                .post(sessionPayload.toString().toRequestBody(jsonMediaType))
-                .build()
-
-            val sessionToken = gatewayHttpClient.newCall(sessionReq).execute().use { resp ->
-                val rawBody = resp.body?.string()?.trim().orEmpty()
-                if (!resp.isSuccessful) {
-                    return@withContext WebhookDispatchResult(
-                        success = false,
-                        statusCode = resp.code,
-                        detail = if (rawBody.isNotBlank()) "Session HTTP ${resp.code}: ${rawBody.take(120)}" else "Session gagal (HTTP ${resp.code})"
-                    )
-                }
-                val json = runCatching { JSONObject(rawBody) }.getOrNull()
-                json?.optString("sessionToken")?.takeIf { it.isNotBlank() }
-                    ?: json?.optString("token")?.takeIf { it.isNotBlank() }
-                    ?: ""
-            }
-
-            if (sessionToken.isBlank()) {
-                return@withContext WebhookDispatchResult(
-                    success = false,
-                    detail = "Server tidak mengembalikan sessionToken berumur pendek."
-                )
-            }
-
-            // Langkah 2: Kirim permintaan lisensi dengan token sesi sementara (TANPA mengirim licenseKey dari klien)
-            val requestPayload = JSONObject().apply {
-                put("target", cleanAdminWa)
-                put("deviceId", normalizedId)
-                put("device_id", normalizedId)
-                put("storeName", storeName.trim())
-                put("store_name", storeName.trim())
-                put("packageName", packageName)
-                put("timestamp", System.currentTimeMillis())
-            }
             val dispatchReq = Request.Builder()
-                .url(buildRequestEndpoint(baseUrl))
-                .addHeader("Authorization", "Bearer $sessionToken")
-                .addHeader("X-Session-Token", sessionToken)
-                .post(requestPayload.toString().toRequestBody(jsonMediaType))
+                .url(requestUrl)
+                .post(payloadJson.toRequestBody(jsonMediaType))
                 .build()
 
             gatewayHttpClient.newCall(dispatchReq).execute().use { response ->
-                val bodySnippet = response.body?.string()?.trim()?.take(140).orEmpty()
+                val rawBody = response.body?.string()?.trim().orEmpty()
+                val json = runCatching { JSONObject(rawBody) }.getOrNull()
+                val serverOk = json?.optBoolean("ok", response.isSuccessful) ?: response.isSuccessful
+                val serverStatus = json?.optString("status", "")?.trim().orEmpty()
+                val isActivated = json?.optBoolean("activated", false) == true ||
+                    serverStatus.equals("active", ignoreCase = true)
+                val serverMsg = json?.optString("message", "")?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: rawBody.take(140).ifBlank { response.message }
+
+                val success = response.isSuccessful && serverOk
+                val finalDetail = if (success) {
+                    serverMsg
+                } else {
+                    "$serverMsg (URL: $requestUrl)"
+                }
+
                 WebhookDispatchResult(
-                    success = response.isSuccessful,
+                    success = success,
                     statusCode = response.code,
-                    detail = if (bodySnippet.isNotBlank()) bodySnippet else response.message
+                    activated = isActivated,
+                    status = serverStatus,
+                    detail = finalDetail
                 )
             }
         } catch (e: Exception) {
             WebhookDispatchResult(
                 success = false,
-                detail = e.localizedMessage ?: "Gagal terhubung ke server webhook."
+                detail = "${e.localizedMessage ?: "Gagal terhubung ke server webhook."} (URL: $requestUrl)"
+            )
+        }
+    }
+
+    fun buildBusinessNameEndpoint(baseUrl: String): String = "${baseUrl.trimEnd('/')}/api/license/business-name"
+
+    suspend fun sendBusinessNameUpdateToServer(
+        deviceId: String,
+        storeName: String,
+        baseUrlOverride: String? = null
+    ): WebhookDispatchResult = withContext(Dispatchers.IO) {
+        val rawBase = baseUrlOverride?.takeIf { it.isNotBlank() } ?: BuildConfig.WEBHOOK_BASE_URL
+        val baseUrl = normalizeHttpsGatewayUrl(rawBase)
+            ?: return@withContext WebhookDispatchResult(
+                success = false,
+                detail = "WEBHOOK_BASE_URL harus berupa URL HTTPS yang valid."
+            )
+        if (baseUrl.contains("example.com", ignoreCase = true)) {
+            return@withContext WebhookDispatchResult(
+                success = false,
+                detail = "WEBHOOK_BASE_URL belum dikonfigurasi."
+            )
+        }
+
+        val normalizedId = extractDeviceIdFromText(deviceId) ?: deviceId.trim().uppercase()
+        if (normalizedId.isBlank() || storeName.isBlank()) {
+            return@withContext WebhookDispatchResult(
+                success = false,
+                detail = "ID Perangkat atau Nama Toko kosong."
+            )
+        }
+
+        val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+        val payloadJson = JSONObject().apply {
+            put("business_name", storeName.trim())
+            put("device_id", normalizedId)
+        }.toString()
+        val requestUrl = buildBusinessNameEndpoint(baseUrl)
+
+        return@withContext try {
+            val dispatchReq = Request.Builder()
+                .url(requestUrl)
+                .post(payloadJson.toRequestBody(jsonMediaType))
+                .build()
+
+            gatewayHttpClient.newCall(dispatchReq).execute().use { response ->
+                val rawBody = response.body?.string()?.trim().orEmpty()
+                val json = runCatching { JSONObject(rawBody) }.getOrNull()
+                val serverOk = json?.optBoolean("ok", response.isSuccessful) ?: response.isSuccessful
+                val serverMsg = json?.optString("message", "")?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: rawBody.take(140).ifBlank { response.message }
+
+                WebhookDispatchResult(
+                    success = response.isSuccessful && serverOk,
+                    statusCode = response.code,
+                    detail = serverMsg
+                )
+            }
+        } catch (e: Exception) {
+            WebhookDispatchResult(
+                success = false,
+                detail = "${e.localizedMessage ?: "Gagal terhubung."} (URL: $requestUrl)"
             )
         }
     }
 
     /**
-     * Memverifikasi Kode API secara server-side (/api/license/verify).
-     * Jika server tidak terjangkau atau endpoint belum tersedia (404/offline),
-     * jatuh kembali ke verifikasi lokal untuk mendukung generator PIN Admin offline.
+     * Memverifikasi aktivasi via kode API offline (PIN Admin) atau memeriksa ulang
+     * status aktivasi perangkat dari server (/api/license/status?device_id=...).
      */
     suspend fun verifyAndActivateLicense(
         context: Context,
@@ -604,75 +717,31 @@ object LicenseManager {
         }
 
         val deviceId = getOrCreateDeviceId(context)
-        val baseUrl = normalizeHttpsGatewayUrl(BuildConfig.WEBHOOK_BASE_URL)
-
-        if (baseUrl != null && isSilentWaGatewayConfigured()) {
-            try {
-                val payload = JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("device_id", deviceId)
-                    put("licenseKey", cleanedInput)
-                    put("license_key", cleanedInput)
-                    put("packageName", context.packageName)
-                }
-                val req = Request.Builder()
-                    .url(buildVerifyEndpoint(baseUrl))
-                    .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-                    .build()
-
-                gatewayHttpClient.newCall(req).execute().use { resp ->
-                    val rawBody = resp.body?.string()?.trim().orEmpty()
-                    val json = runCatching { JSONObject(rawBody) }.getOrNull()
-                    val serverMsg = json?.optString("message")?.takeIf { it.isNotBlank() }
-                        ?: json?.optString("error")?.takeIf { it.isNotBlank() }
-
-                    when {
-                        resp.isSuccessful -> {
-                            val isValid = json?.optBoolean("valid", false) == true
-                            return@withContext if (isValid) {
-                                activateFromServerVerification(context, cleanedInput)
-                                ActivationResult(
-                                    success = true,
-                                    message = serverMsg ?: "Lisensi aktif permanen! Terverifikasi server.",
-                                    verifiedByServer = true
-                                )
-                            } else {
-                                ActivationResult(
-                                    success = false,
-                                    message = serverMsg ?: "Kode API ditolak server untuk perangkat $deviceId.",
-                                    verifiedByServer = true
-                                )
-                            }
-                        }
-                        resp.code in 400..403 -> {
-                            return@withContext ActivationResult(
-                                success = false,
-                                message = serverMsg ?: "Kode API tidak valid atau belum dikonfirmasi Admin.",
-                                verifiedByServer = true
-                            )
-                        }
-                        // 404 / 5xx -> lanjutkan ke fallback verifikasi lokal offline
-                    }
-                }
-            } catch (_: Exception) {
-                // Offline / timeout -> lanjut ke fallback lokal agar aktivasi offline tetap berjalan
-            }
-        }
-
         val localOk = activateWithKey(context, cleanedInput)
-        return@withContext if (localOk) {
-            ActivationResult(
+        if (localOk) {
+            return@withContext ActivationResult(
                 success = true,
                 message = "Lisensi aktif permanen! Terima kasih telah membeli Kasir Pro.",
                 verifiedByServer = false
             )
-        } else {
-            ActivationResult(
-                success = false,
-                message = "Kode API salah atau bukan untuk perangkat ini ($deviceId).",
-                verifiedByServer = false
-            )
         }
+
+        if (isSilentWaGatewayConfigured(context)) {
+            val statusResult = checkServerActivationStatus(context)
+            if (statusResult.isActivated) {
+                return@withContext ActivationResult(
+                    success = true,
+                    message = statusResult.message,
+                    verifiedByServer = true
+                )
+            }
+        }
+
+        return@withContext ActivationResult(
+            success = false,
+            message = "Kode API salah atau bukan untuk perangkat ini ($deviceId).",
+            verifiedByServer = false
+        )
     }
 
     fun revokeLocalActivation(context: Context) {
@@ -693,12 +762,12 @@ object LicenseManager {
     }
 
     /**
-     * Memeriksa status aktivasi perangkat secara otomatis dari Website Admin (/api/license/status).
+     * Memeriksa status aktivasi perangkat secara otomatis dari Website Admin (/api/license/status?device_id=...).
      * Ketika Admin menekan tombol Aktifkan di website, aplikasi langsung terbuka tanpa input kode manual.
      */
     suspend fun checkServerActivationStatus(context: Context): ServerStatusResult = withContext(Dispatchers.IO) {
-        val baseUrl = normalizeHttpsGatewayUrl(BuildConfig.WEBHOOK_BASE_URL)
-        if (baseUrl == null || !isSilentWaGatewayConfigured()) {
+        val baseUrl = getEffectiveGatewayBaseUrl(context)
+        if (baseUrl == null || !isSilentWaGatewayConfigured(context)) {
             return@withContext ServerStatusResult(
                 reachable = false,
                 isActivated = false,
@@ -708,9 +777,7 @@ object LicenseManager {
         }
 
         val deviceId = getOrCreateDeviceId(context)
-        val encodedId = java.net.URLEncoder.encode(deviceId, "UTF-8")
-        val encodedPkg = java.net.URLEncoder.encode(context.packageName, "UTF-8")
-        val url = "${buildStatusEndpoint(baseUrl)}?deviceId=$encodedId&packageName=$encodedPkg"
+        val url = buildStatusQueryUrl(baseUrl, deviceId)
 
         return@withContext try {
             val req = Request.Builder().url(url).get().build()
@@ -722,7 +789,7 @@ object LicenseManager {
                         reachable = false,
                         isActivated = false,
                         statusLabel = "ERROR_${resp.code}",
-                        message = "Belum dapat memeriksa status server (HTTP ${resp.code})."
+                        message = "Belum dapat memeriksa status server (HTTP ${resp.code} di $url)."
                     )
                 }
 

@@ -77,6 +77,7 @@ fun DashboardScreen(
     onNavigateToSettings: () -> Unit
 ) {
     val storeConfig by viewModel.storeConfig.collectAsStateWithLifecycle()
+    val cloudSyncState by viewModel.cloudSyncState.collectAsStateWithLifecycle()
     val summary by viewModel.dashboardSummary.collectAsStateWithLifecycle()
     val allProducts by viewModel.allProducts.collectAsStateWithLifecycle()
     val customColors = LocalCustomColors.current
@@ -723,7 +724,7 @@ fun DashboardScreen(
                             .padding(end = 8.dp)
                     ) {
                         Text(
-                            text = storeConfig?.storeName ?: "Warung Makan",
+                            text = storeConfig?.storeName?.takeIf { it.isNotBlank() } ?: "Kasir Pro",
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onBackground,
@@ -738,6 +739,45 @@ fun DashboardScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (cloudSyncState.mode != com.example.util.FirebaseSyncManager.CloudConnectionMode.NOT_CONFIGURED) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val (statusLabel, badgeColor) = when (cloudSyncState.mode) {
+                                com.example.util.FirebaseSyncManager.CloudConnectionMode.ONLINE_SYNCED ->
+                                    "Cloud Online • ${cloudSyncState.projectId}" to Color(0xFF10B981)
+                                com.example.util.FirebaseSyncManager.CloudConnectionMode.UPLOADING_QUEUE ->
+                                    "Mengunggah antrean ke Cloud..." to MaterialTheme.colorScheme.primary
+                                com.example.util.FirebaseSyncManager.CloudConnectionMode.OFFLINE_QUEUED ->
+                                    "Offline • Antrean aman, otomatis upload saat online" to Color(0xFFF59E0B)
+                                com.example.util.FirebaseSyncManager.CloudConnectionMode.ERROR ->
+                                    "Cloud Terkendala • Cek Pengaturan" to MaterialTheme.colorScheme.error
+                                else -> "" to Color.Transparent
+                            }
+                            if (statusLabel.isNotBlank()) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(badgeColor.copy(alpha = 0.14f))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(badgeColor)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = statusLabel,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = badgeColor,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {

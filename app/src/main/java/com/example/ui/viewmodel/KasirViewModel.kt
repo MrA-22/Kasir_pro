@@ -19,7 +19,6 @@ import com.example.printer.ThermalPrinterManager
 import com.example.util.AtomicVoiceCommand
 import com.example.util.Code128Encoder
 import com.example.util.CurrencyUtils
-import com.example.util.GeminiClient
 import com.example.util.LicenseManager
 import com.example.util.ReceiptBitmapGenerator
 import com.example.util.ReportExporter
@@ -122,9 +121,12 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
     private val _changePopupData = MutableStateFlow<ChangePopupData?>(null)
     val changePopupData: StateFlow<ChangePopupData?> = _changePopupData.asStateFlow()
 
-    fun dismissChangePopup() {
+    fun dismissChangePopup(speakOnDismiss: Boolean = true) {
+        val hadPopup = _changePopupData.value != null
         _changePopupData.value = null
-        finishPayment()
+        if (hadPopup && speakOnDismiss) {
+            finishPayment()
+        }
     }
 
     // Cart state
@@ -217,7 +219,7 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshLicenseStatus() {
         _licenseStatus.value = LicenseManager.getTrialState(getApplication())
-        if (LicenseManager.isSilentWaGatewayConfigured()) {
+        if (LicenseManager.isSilentWaGatewayConfigured(getApplication())) {
             checkServerActivationStatus(silent = true)
         }
     }
@@ -227,15 +229,29 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isCheckingServerActivation.value = true
             try {
+                val previousState = _licenseStatus.value
+                val wasActivated = previousState.isActivated
+                val wasLockedOut = previousState.isTrialExpired && !previousState.isActivated
+
                 val result = LicenseManager.checkServerActivationStatus(getApplication())
                 if (result.isActivated) {
                     _licenseStatus.value = LicenseManager.getTrialState(getApplication())
                     _serverActivationStatusMessage.value = null
-                    emitToast(result.message)
+                    if (!wasActivated) {
+                        emitToast(result.message)
+                        speak("Pembayaran berhasil. Aplikasi Kasir Pro aktif permanen.")
+                    } else if (!silent) {
+                        emitToast(result.message)
+                    }
                 } else if (result.isRevoked) {
                     _licenseStatus.value = LicenseManager.getTrialState(getApplication())
                     _serverActivationStatusMessage.value = result.message
-                    if (!silent) emitToast(result.message)
+                    if (wasActivated || !wasLockedOut) {
+                        emitToast(result.message)
+                        speak("Lisensi perangkat dinonaktifkan oleh admin.")
+                    } else if (!silent) {
+                        emitToast(result.message)
+                    }
                 } else {
                     if (result.reachable) {
                         _serverActivationStatusMessage.value = result.message
@@ -262,10 +278,14 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     suspend fun activateLicenseAsync(key: String): LicenseManager.ActivationResult {
+        val wasActivated = _licenseStatus.value.isActivated
         val result = LicenseManager.verifyAndActivateLicense(getApplication(), key)
         if (result.success) {
             _licenseStatus.value = LicenseManager.getTrialState(getApplication())
             _serverActivationStatusMessage.value = null
+            if (!wasActivated) {
+                speak("Pembayaran berhasil. Aplikasi Kasir Pro aktif permanen.")
+            }
         }
         emitToast(result.message)
         return result
@@ -275,6 +295,21 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
         LicenseManager.setAdminWhatsapp(getApplication(), waNumber)
         refreshLicenseStatus()
         emitToast("Nomor WhatsApp Admin diperbarui.")
+    }
+
+    fun updateWebhookBaseUrl(rawUrl: String): Boolean {
+        val normalized = LicenseManager.setCustomWebhookBaseUrl(getApplication(), rawUrl)
+        return if (normalized != null) {
+            refreshLicenseStatus()
+            emitToast(
+                if (rawUrl.isBlank()) "URL Webhook dikembalikan ke default ($normalized)"
+                else "URL Webhook disimpan: $normalized"
+            )
+            true
+        } else {
+            emitToast("URL Webhook tidak valid! Gunakan domain HTTPS (contoh: https://webhook.mrapro.site).")
+            false
+        }
     }
 
     fun resetTrialForTesting() {
@@ -298,13 +333,27 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
 
         val adminWa = _licenseStatus.value.adminWhatsappNumber
         val pkgName = getApplication<Application>().packageName
+        val effectiveBase = LicenseManager.getEffectiveGatewayBaseUrl(getApplication())
         viewModelScope.launch(Dispatchers.IO) {
-            LicenseManager.sendSilentLicenseRequestToAdminWa(
+            val result = LicenseManager.sendSilentLicenseRequestDetailed(
                 deviceId = deviceId,
                 storeName = storeName,
                 adminWaNumber = adminWa,
-                packageName = pkgName
+                packageName = pkgName,
+                baseUrlOverride = effectiveBase
             )
+            if (result.activated) {
+                val wasActivated = _licenseStatus.value.isActivated
+                LicenseManager.activateFromServerVerification(getApplication(), "WEB-$deviceId")
+                _licenseStatus.value = LicenseManager.getTrialState(getApplication())
+                _serverActivationStatusMessage.value = null
+                if (!wasActivated) {
+                    emitToast(result.detail.ifBlank { "Lisensi aktif permanen!" })
+                    speak("Pembayaran berhasil. Aplikasi Kasir Pro aktif permanen.")
+                }
+            } else if (result.success) {
+                _serverActivationStatusMessage.value = result.detail.ifBlank { "Menunggu aktivasi admin" }
+            }
             com.example.util.FirebaseSyncManager.logLicenseRequest(deviceId, storeName)
         }
     }
@@ -322,18 +371,22 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
         val adminWa = _licenseStatus.value.adminWhatsappNumber
         val storeName = storeConfig.value?.storeName ?: "Tes Kasir Pro"
         val pkgName = getApplication<Application>().packageName
+        val effectiveBase = LicenseManager.getEffectiveGatewayBaseUrl(getApplication())
         viewModelScope.launch {
-            val result = LicenseManager.sendSilentLicenseRequestDetailed(
+            val statusResult = LicenseManager.checkServerActivationStatus(getApplication())
+            val reqResult = LicenseManager.sendSilentLicenseRequestDetailed(
                 deviceId = "KSR-TEST-0001",
                 storeName = storeName,
                 adminWaNumber = adminWa,
-                packageName = pkgName
+                packageName = pkgName,
+                baseUrlOverride = effectiveBase
             )
-            val statusText = if (result.statusCode > 0) "HTTP ${result.statusCode}" else "Error"
-            if (result.success) {
-                emitToast("Webhook OK ($statusText)! Token sesi & permintaan tes berhasil.")
-            } else {
-                emitToast("Webhook gagal ($statusText): ${result.detail}")
+            val statusText = if (reqResult.statusCode > 0) "HTTP ${reqResult.statusCode}" else "Error"
+            when {
+                reqResult.success -> emitToast("Webhook OK ($statusText)! ${reqResult.detail}")
+                statusResult.reachable && reqResult.statusCode == 429 ->
+                    emitToast("Status OK & Webhook aktif ($statusText): ${reqResult.detail}")
+                else -> emitToast("Webhook ($statusText): ${reqResult.detail}")
             }
         }
     }
@@ -363,18 +416,26 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
             storeConfigDao = db.storeConfigDao()
         )
 
-        // Restore Google Services JSON from public storage if Room got cleared or reset
-        viewModelScope.launch {
+        // Restore Google Services JSON and start real-time Firestore sync automatically if configured
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                val current = repository.getStoreConfigSync()
-                if (current != null && current.googleServicesJson.isBlank()) {
-                    val sdFile = java.io.File(getApplication<Application>().filesDir, "google-services-pos.json")
+                val appContext = getApplication<Application>()
+                var current = repository.getStoreConfigSync()
+                var jsonToInit = current?.googleServicesJson?.trim().orEmpty()
+                if (jsonToInit.isBlank()) {
+                    val sdFile = java.io.File(appContext.filesDir, "google-services-pos.json")
                     if (sdFile.exists()) {
-                        val sdJson = sdFile.readText()
+                        val sdJson = sdFile.readText().trim()
                         if (sdJson.isNotBlank()) {
-                            repository.updateStoreConfig(current.copy(googleServicesJson = sdJson))
+                            jsonToInit = sdJson
+                            if (current != null) {
+                                repository.updateStoreConfigLocalOnly(current.copy(googleServicesJson = sdJson))
+                            }
                         }
                     }
+                }
+                if (jsonToInit.isNotBlank() && com.example.util.FirebaseSyncManager.initialize(appContext, jsonToInit)) {
+                    com.example.util.FirebaseSyncManager.startRealtimeSync(appContext, repository)
                 }
             } catch (err: Exception) {
                 err.printStackTrace()
@@ -383,8 +444,8 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
 
         storeConfig = repository.storeConfig.stateIn(
             viewModelScope,
-            SharingStarted.WhileSubscribed(5000),
-            StoreConfig()
+            SharingStarted.Eagerly,
+            null
         )
 
         allCategories = repository.allCategories.stateIn(
@@ -922,15 +983,104 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
         _aiLastResponse.value = null
     }
 
-    fun triggerTwoWayCloudSync() {
+    val cloudSyncState: StateFlow<com.example.util.FirebaseSyncManager.CloudSyncStatus> =
+        com.example.util.FirebaseSyncManager.cloudSyncState
+
+    private val _firebaseStatusMessage = MutableStateFlow<String?>(null)
+    val firebaseStatusMessage: StateFlow<String?> = _firebaseStatusMessage.asStateFlow()
+
+    private val _isSyncingCloud = MutableStateFlow(false)
+    val isSyncingCloud: StateFlow<Boolean> = _isSyncingCloud.asStateFlow()
+
+    fun startCloudRealtimeSyncIfReady(jsonStr: String = "") {
         viewModelScope.launch(Dispatchers.IO) {
-            val success = com.example.util.FirebaseSyncManager.syncAllDataWithCloud(getApplication<Application>(), repository)
-            kotlinx.coroutines.withContext(Dispatchers.Main) {
-                if (success) {
-                    emitToast("Sinkronisasi dua-arah Cloud berhasil!")
-                } else {
-                    emitToast("Gagal melakukan sinkronisasi!")
+            val appContext = getApplication<Application>()
+            val trimmed = jsonStr.trim()
+            if (trimmed.isNotBlank()) {
+                if (com.example.util.FirebaseSyncManager.initialize(appContext, trimmed)) {
+                    com.example.util.FirebaseSyncManager.startRealtimeSync(appContext, repository)
                 }
+            } else if (com.example.util.FirebaseSyncManager.isReady()) {
+                com.example.util.FirebaseSyncManager.startRealtimeSync(appContext, repository)
+            }
+        }
+    }
+
+    fun connectFirebaseConfig(config: StoreConfig, rawJson: String) {
+        val trimmedJson = rawJson.trim()
+        viewModelScope.launch(Dispatchers.IO) {
+            val appContext = getApplication<Application>()
+            val existingLocal = repository.getStoreConfigSync() ?: config
+            if (trimmedJson.isBlank()) {
+                com.example.util.FirebaseSyncManager.disconnect(appContext)
+                repository.updateStoreConfigLocalOnly(existingLocal.copy(googleServicesJson = ""))
+                _firebaseStatusMessage.value = "Konfigurasi Firebase dihapus dan diputus."
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    emitToast("Konfigurasi Firebase dikosongkan!")
+                }
+                return@launch
+            }
+
+            val initRes = com.example.util.FirebaseSyncManager.initializeDetailed(appContext, trimmedJson)
+            repository.updateStoreConfigLocalOnly(existingLocal.copy(googleServicesJson = trimmedJson))
+
+            val statusMsg = if (initRes.success) {
+                com.example.util.FirebaseSyncManager.startRealtimeSync(appContext, repository)
+                val pullCfg = com.example.util.FirebaseSyncManager.pullStoreConfigFromCloudIfPresent(appContext, repository)
+                val appPkg = appContext.packageName
+                val pkgNote = if (initRes.clientPackageName.isNotBlank() && initRes.clientPackageName != appPkg) {
+                    " Catatan: package_name di JSON (${initRes.clientPackageName}) berbeda dengan aplikasi ($appPkg)."
+                } else ""
+                when {
+                    pullCfg.errorMessage != null ->
+                        "Terhubung ke project ${initRes.projectId}, namun gagal membaca Cloud: ${pullCfg.errorMessage}"
+                    pullCfg.found && !pullCfg.storeName.isNullOrBlank() ->
+                        "Terhubung real-time ke ${initRes.projectId}! Profil '${pullCfg.storeName}' aktif.$pkgNote"
+                    else ->
+                        "Firebase terhubung real-time ke ${initRes.projectId}! Offline queue aktif.$pkgNote"
+                }
+            } else {
+                initRes.message
+            }
+            _firebaseStatusMessage.value = statusMsg
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                emitToast(statusMsg)
+            }
+        }
+    }
+
+    fun triggerTwoWayCloudSync(pendingJson: String = "") {
+        if (_isSyncingCloud.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isSyncingCloud.value = true
+            try {
+                val appContext = getApplication<Application>()
+                val trimmedPending = pendingJson.trim()
+                val storedJson = repository.getStoreConfigSync()?.googleServicesJson?.trim().orEmpty()
+                val jsonToUse = trimmedPending.ifBlank { storedJson }
+
+                if (jsonToUse.isNotBlank() && (!com.example.util.FirebaseSyncManager.isReady() || trimmedPending.isNotBlank())) {
+                    val initRes = com.example.util.FirebaseSyncManager.initializeDetailed(appContext, jsonToUse)
+                    if (!initRes.success) {
+                        _firebaseStatusMessage.value = initRes.message
+                        kotlinx.coroutines.withContext(Dispatchers.Main) {
+                            emitToast(initRes.message)
+                        }
+                        return@launch
+                    }
+                    if (trimmedPending.isNotBlank() && trimmedPending != storedJson) {
+                        val currentCfg = repository.getStoreConfigSync() ?: StoreConfig()
+                        repository.updateStoreConfigLocalOnly(currentCfg.copy(googleServicesJson = trimmedPending))
+                    }
+                }
+
+                val result = com.example.util.FirebaseSyncManager.syncAllDataWithCloudDetailed(appContext, repository)
+                _firebaseStatusMessage.value = result.message
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    emitToast(result.message)
+                }
+            } finally {
+                _isSyncingCloud.value = false
             }
         }
     }
@@ -938,14 +1088,31 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
     // Store & Printer Settings
     fun updateStoreConfig(config: StoreConfig) {
         viewModelScope.launch {
+            val oldName = storeConfig.value?.storeName.orEmpty()
             repository.updateStoreConfig(config)
             emitToast("Pengaturan toko berhasil disimpan")
+
+            if (config.storeName.isNotBlank() && config.storeName != oldName) {
+                try {
+                    val deviceId = LicenseManager.getOrCreateDeviceId(getApplication())
+                    val effectiveBase = LicenseManager.getEffectiveGatewayBaseUrl(getApplication())
+                    LicenseManager.sendBusinessNameUpdateToServer(
+                        deviceId = deviceId,
+                        storeName = config.storeName,
+                        baseUrlOverride = effectiveBase
+                    )
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 
     fun updateThemeMode(themeMode: String) {
-        val current = storeConfig.value ?: StoreConfig()
-        updateStoreConfig(current.copy(themeMode = themeMode))
+        viewModelScope.launch {
+            val current = repository.getStoreConfigSync() ?: storeConfig.value ?: StoreConfig()
+            repository.updateStoreConfig(current.copy(themeMode = themeMode))
+            emitToast("Pengaturan toko berhasil disimpan")
+        }
     }
 
     // AI Assistant Logic
@@ -2445,124 +2612,9 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
             putJsonArray("required") { add("action"); add("message") }
         }
 
-        val resultJson = GeminiClient.callGeminiJson(systemPrompt, command, responseSchema)
-        
         _isAiThinking.value = false
-        if (resultJson != null) {
-            try {
-                val json = kotlinx.serialization.json.Json.parseToJsonElement(resultJson).let { 
-                    if (it is kotlinx.serialization.json.JsonObject) it else null
-                }
-                
-                if (json != null) {
-                    val action = json["action"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null }
-                    val message = json["message"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null } ?: "Tugas selesai"
-                    
-                    _aiLastResponse.value = message
-                    
-                    when (action) {
-                        "NAVIGATE" -> {
-                            val target = json["target"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null }
-                            if (target != null) {
-                                _aiNavigationTrigger.emit(target)
-                            }
-                        }
-                        "ADD_PRODUCT" -> {
-                            val pName = json["productName"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null }
-                            val price = json["price"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toDoubleOrNull() else null } ?: 10000.0
-                            if (!pName.isNullOrBlank()) {
-                                val defaultCat = allCategories.value.firstOrNull()
-                                saveProduct(
-                                    id = 0L,
-                                    name = pName,
-                                    categoryId = defaultCat?.id ?: 1L,
-                                    categoryName = defaultCat?.name ?: "Makanan",
-                                    price = price,
-                                    costPrice = price * 0.7,
-                                    stock = 20,
-                                    minStockAlert = 5,
-                                    unit = "Porsi"
-                                )
-                            }
-                            emitToast(message)
-                        }
-                        "UPDATE_PRODUCT_PRICE" -> {
-                            val pId = json["productId"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toLongOrNull() else null }
-                            val pName = json["productName"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null }
-                            val price = json["price"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toDoubleOrNull() else null }
-                            val prod = products.find { it.id == pId } ?: products.find { pName != null && it.name.contains(pName, ignoreCase = true) }
-                            if (prod != null && price != null) {
-                                saveProduct(
-                                    id = prod.id,
-                                    name = prod.name,
-                                    categoryId = prod.categoryId,
-                                    categoryName = prod.categoryName,
-                                    price = price,
-                                    costPrice = prod.costPrice,
-                                    stock = prod.stock,
-                                    minStockAlert = prod.minStockAlert,
-                                    unit = prod.unit
-                                )
-                            }
-                            emitToast(message)
-                        }
-                        "UPDATE_STOCK" -> {
-                            val pId = json["productId"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toLongOrNull() else null }
-                            val qty = json["quantity"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toIntOrNull() else null } ?: 0
-                            if (pId != null) {
-                                adjustStock(pId, qty)
-                            }
-                            emitToast(message)
-                        }
-                        "DELETE_PRODUCT" -> {
-                            val pId = json["productId"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toLongOrNull() else null }
-                            val prod = products.find { it.id == pId }
-                            if (prod != null) {
-                                deleteProduct(prod)
-                            }
-                            emitToast(message)
-                        }
-                        "ADD_TO_CART" -> {
-                            val pId = json["productId"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toLongOrNull() else null }
-                            val qty = json["quantity"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toIntOrNull() else null } ?: 1
-                            val product = products.find { it.id == pId }
-                            if (product != null) {
-                                repeat(qty) { addToCart(product) }
-                                emitToast(message)
-                            }
-                        }
-                        "CLEAR_CART" -> {
-                            clearCart()
-                            emitToast(message)
-                        }
-                        "CHECKOUT" -> {
-                            val method = json["paymentMethod"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null } ?: "TUNAI"
-                            val amount = json["amountReceived"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toDoubleOrNull() else null } ?: 0.0
-                            _aiCheckoutTrigger.emit(Pair(method, amount))
-                            emitToast(message)
-                        }
-                        "CLEAR_ALL_STOCKS" -> {
-                            clearAllProductStocks()
-                            emitToast(message)
-                        }
-                        "DELETE_ALL_PRODUCTS" -> {
-                            deleteAllProducts()
-                            emitToast(message)
-                        }
-                        "CHANGE_THEME" -> {
-                            val target = json["target"]?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null } ?: "DARK"
-                            updateThemeMode(target)
-                            emitToast(message)
-                        }
-                        "UNKNOWN" -> emitToast(message)
-                    }
-                }
-            } catch (e: Exception) {
-                _aiLastResponse.value = "Gagal memproses perintah AI."
-            }
-        } else {
-            _aiLastResponse.value = "Perintah tidak dikenali atau koneksi AI belum terhubung."
-        }
+        _aiLastResponse.value = "Gunakan perintah suara langsung seperti 'tambah ayam goreng' atau 'buka kasir'."
+        emitToast("Perintah suara diproses secara lokal.")
     }
 
     fun clearAiResponse() {
@@ -2637,7 +2689,7 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
 
     // Reports export
     fun exportReportCsv(reportTitle: String, transactions: List<TransactionWithItems>) {
-        val config = storeConfig.value ?: return
+        val config = storeConfig.value ?: StoreConfig()
         val productsSnapshot = allProducts.value
         viewModelScope.launch {
             val uri = ReportExporter.exportToCsv(getApplication(), reportTitle, config, transactions, productsSnapshot)
@@ -2650,7 +2702,7 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun exportReportExcel(reportTitle: String, transactions: List<TransactionWithItems>) {
-        val config = storeConfig.value ?: return
+        val config = storeConfig.value ?: StoreConfig()
         val productsSnapshot = allProducts.value
         viewModelScope.launch {
             val uri = ReportExporter.exportToExcel(getApplication(), reportTitle, config, transactions, productsSnapshot)
@@ -2663,7 +2715,7 @@ class KasirViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun exportReportPdf(reportTitle: String, transactions: List<TransactionWithItems>) {
-        val config = storeConfig.value ?: return
+        val config = storeConfig.value ?: StoreConfig()
         viewModelScope.launch {
             val uri = ReportExporter.exportToPdf(getApplication(), reportTitle, config, transactions)
             if (uri != null) {

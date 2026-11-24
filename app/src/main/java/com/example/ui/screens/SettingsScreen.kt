@@ -75,6 +75,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -114,6 +115,9 @@ fun SettingsScreen(
     val isCheckingServerActivation by viewModel.isCheckingServerActivation.collectAsStateWithLifecycle()
     val serverActivationHint by viewModel.serverActivationStatusMessage.collectAsStateWithLifecycle()
     val cloudLicenseRequests by viewModel.cloudLicenseRequests.collectAsStateWithLifecycle()
+    val firebaseStatusMessage by viewModel.firebaseStatusMessage.collectAsStateWithLifecycle()
+    val cloudSyncState by viewModel.cloudSyncState.collectAsStateWithLifecycle()
+    val isSyncingCloud by viewModel.isSyncingCloud.collectAsStateWithLifecycle()
     val customColors = LocalCustomColors.current
 
     // Local form states
@@ -129,8 +133,9 @@ fun SettingsScreen(
     var noiseCancellationLevel by remember { mutableStateOf(0.8f) }
     var voiceSensitivity by remember { mutableStateOf(0.7f) }
     var isSmartCurrencyFilterEnabled by remember { mutableStateOf(true) }
-    var isDeveloperModeEnabled by remember { mutableStateOf(false) }
-    var googleServicesJsonInput by remember { mutableStateOf("") }
+    var isDeveloperModeEnabled by rememberSaveable { mutableStateOf(false) }
+    var googleServicesJsonInput by rememberSaveable { mutableStateOf("") }
+    var hasPendingJsonEdit by rememberSaveable { mutableStateOf(false) }
     var tapCount by remember { mutableStateOf(0) }
     var selectedTheme by remember { mutableStateOf("DARK") }
 
@@ -141,6 +146,9 @@ fun SettingsScreen(
     var generatedBuyerKey by remember { mutableStateOf("") }
     var adminWaInput by remember(licenseStatus.adminWhatsappNumber) {
         mutableStateOf(licenseStatus.adminWhatsappNumber)
+    }
+    var webhookUrlInput by remember {
+        mutableStateOf(LicenseManager.getEffectiveGatewayBaseUrl(context).orEmpty())
     }
     var showActivationModal by remember { mutableStateOf(false) }
 
@@ -162,7 +170,9 @@ fun SettingsScreen(
             noiseCancellationLevel = it.noiseCancellationLevel
             voiceSensitivity = it.voiceSensitivity
             isSmartCurrencyFilterEnabled = it.isSmartCurrencyFilterEnabled
-            googleServicesJsonInput = it.googleServicesJson
+            if (!hasPendingJsonEdit) {
+                googleServicesJsonInput = it.googleServicesJson
+            }
             selectedTheme = it.themeMode
         }
     }
@@ -182,6 +192,7 @@ fun SettingsScreen(
             try {
                 context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader ->
                     googleServicesJsonInput = reader.readText()
+                    hasPendingJsonEdit = true
                     viewModel.emitToast("File google-services.json berhasil di-load!")
                 }
             } catch (e: Exception) {
@@ -315,9 +326,10 @@ fun SettingsScreen(
                         
                         if (googleServicesJsonInput.isNotBlank()) {
                             OutlinedButton(
-                                onClick = { 
+                                onClick = {
                                     googleServicesJsonInput = ""
-                                    viewModel.emitToast("Konfigurasi dihapus!")
+                                    hasPendingJsonEdit = false
+                                    viewModel.connectFirebaseConfig(storeConfig ?: StoreConfig(), "")
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp)
@@ -331,7 +343,10 @@ fun SettingsScreen(
 
                     OutlinedTextField(
                         value = googleServicesJsonInput,
-                        onValueChange = { googleServicesJsonInput = it },
+                        onValueChange = {
+                            googleServicesJsonInput = it
+                            hasPendingJsonEdit = true
+                        },
                         label = { Text("Isi / Paste google-services.json") },
                         placeholder = { Text("{\"project_info\": ...}") },
                         modifier = Modifier
@@ -348,19 +363,13 @@ fun SettingsScreen(
 
                     Button(
                         onClick = {
+                            hasPendingJsonEdit = false
                             val currentConfig = storeConfig ?: StoreConfig()
-                            val updatedConfig = currentConfig.copy(
-                                googleServicesJson = googleServicesJsonInput.trim()
-                            )
-                            viewModel.updateStoreConfig(updatedConfig)
-                            
-                            if (googleServicesJsonInput.trim().isNotBlank()) {
-                                viewModel.emitToast("Konfigurasi disimpan! Menghubungkan ke Firebase...")
-                            } else {
-                                viewModel.emitToast("Konfigurasi dikosongkan!")
-                            }
+                            viewModel.connectFirebaseConfig(currentConfig, googleServicesJsonInput)
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("save_connect_firebase_button"),
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary
@@ -376,13 +385,62 @@ fun SettingsScreen(
                             if (googleServicesJsonInput.trim().isBlank()) {
                                 viewModel.emitToast("Harap isi atau tempel google-services.json terlebih dahulu!")
                             } else {
-                                viewModel.triggerTwoWayCloudSync()
+                                hasPendingJsonEdit = false
+                                viewModel.triggerTwoWayCloudSync(googleServicesJsonInput)
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSyncingCloud,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("sync_cloud_data_button"),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("🔄 Ambil & Sinkronkan Data Cloud", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(
+                            text = if (isSyncingCloud) "Menyinkronkan ke Cloud..." else "🔄 Ambil & Sinkronkan Data Cloud",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+
+                    val activeProjId = cloudSyncState.projectId.ifBlank {
+                        com.example.util.FirebaseSyncManager.getActiveProjectId()
+                    }
+                    val activeClientPkg = com.example.util.FirebaseSyncManager.getActiveClientPackageName()
+                    val pkgMismatchNote = if (activeClientPkg.isNotBlank() && activeClientPkg != context.packageName) {
+                        "\nCatatan package_name: $activeClientPkg ≠ ${context.packageName}"
+                    } else ""
+                    val liveCloudText = when (cloudSyncState.mode) {
+                        com.example.util.FirebaseSyncManager.CloudConnectionMode.ONLINE_SYNCED ->
+                            "Status Cloud: ${cloudSyncState.detail}$pkgMismatchNote"
+                        com.example.util.FirebaseSyncManager.CloudConnectionMode.OFFLINE_QUEUED ->
+                            "Status Cloud: ${cloudSyncState.detail}$pkgMismatchNote"
+                        com.example.util.FirebaseSyncManager.CloudConnectionMode.UPLOADING_QUEUE ->
+                            "Status Cloud: ${cloudSyncState.detail}$pkgMismatchNote"
+                        com.example.util.FirebaseSyncManager.CloudConnectionMode.ERROR ->
+                            cloudSyncState.detail.ifBlank { "Koneksi Cloud error" }
+                        com.example.util.FirebaseSyncManager.CloudConnectionMode.NOT_CONFIGURED -> null
+                    }
+                    val statusSummary = listOfNotNull(
+                        firebaseStatusMessage?.takeIf { it.isNotBlank() },
+                        liveCloudText?.takeIf { it.isNotBlank() && it != firebaseStatusMessage }
+                    ).joinToString("\n").ifBlank { null }
+
+                    if (!statusSummary.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.75f))
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = statusSummary,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -454,8 +512,9 @@ fun SettingsScreen(
                                 Text("Buka Generator API Key", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         } else {
-                            val isGatewayReady = LicenseManager.isSilentWaGatewayConfigured()
-                            val gatewayHost = LicenseManager.getConfiguredGatewayHost()
+                            val activeGatewayUrl = LicenseManager.getEffectiveGatewayBaseUrl(context)
+                            val isGatewayReady = LicenseManager.isSilentWaGatewayConfigured(context)
+                            val gatewayHost = LicenseManager.getConfiguredGatewayHost(context)
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -468,23 +527,48 @@ fun SettingsScreen(
                             ) {
                                 Text(
                                     text = if (isGatewayReady) {
-                                        "Server Webhook Otomatis: AKTIF (${gatewayHost.ifBlank { "HTTPS" }}) — token sesi berumur pendek & verifikasi server-side (tanpa secret statis di APK)."
+                                        "Server Webhook Otomatis: AKTIF ($activeGatewayUrl) — sinkron langsung dengan /api/license/request & /api/license/status."
                                     } else {
-                                        "Server Webhook Otomatis: Belum aktif — isi WEBHOOK_BASE_URL di Secrets AI Studio."
+                                        "Server Webhook Otomatis: Belum aktif — isi URL domain server Go Anda di bawah atau via WEBHOOK_BASE_URL."
                                     },
                                     fontSize = 10.sp,
                                     lineHeight = 14.sp,
                                     color = if (isGatewayReady) StatusSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontWeight = FontWeight.Medium
                                 )
-                                if (isGatewayReady) {
-                                    Spacer(modifier = Modifier.height(6.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
+                                OutlinedTextField(
+                                    value = webhookUrlInput,
+                                    onValueChange = { webhookUrlInput = it },
+                                    label = { Text("Domain Server Webhook (${gatewayHost.ifBlank { "HTTPS" }})") },
+                                    placeholder = { Text("https://webhook.mrapro.site") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
                                     OutlinedButton(
-                                        onClick = { viewModel.testAdminWebhookConnection() },
-                                        modifier = Modifier.fillMaxWidth(),
+                                        onClick = {
+                                            if (viewModel.updateWebhookBaseUrl(webhookUrlInput)) {
+                                                webhookUrlInput = LicenseManager.getEffectiveGatewayBaseUrl(context).orEmpty()
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Text("Tes Koneksi Webhook Admin", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                        Text("Simpan URL", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                    if (isGatewayReady) {
+                                        OutlinedButton(
+                                            onClick = { viewModel.testAdminWebhookConnection() },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Tes Koneksi Webhook", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                        }
                                     }
                                 }
                             }
@@ -1463,7 +1547,9 @@ fun SettingsScreen(
                     noiseCancellationLevel = noiseCancellationLevel,
                     voiceSensitivity = voiceSensitivity,
                     isSmartCurrencyFilterEnabled = isSmartCurrencyFilterEnabled,
-                    themeMode = selectedTheme
+                    themeMode = selectedTheme,
+                    googleServicesJson = storeConfig?.googleServicesJson?.takeIf { it.isNotBlank() } ?: googleServicesJsonInput.trim(),
+                    qrisBase64 = storeConfig?.qrisBase64 ?: ""
                 )
                 viewModel.updateStoreConfig(updatedConfig)
             },

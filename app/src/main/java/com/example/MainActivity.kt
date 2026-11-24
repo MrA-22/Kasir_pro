@@ -162,16 +162,16 @@ fun MainAppScreen(viewModel: KasirViewModel) {
             showEarlyActivationDialog = false
             viewModel.closeReceiptScanner()
             viewModel.closeReceipt()
-            viewModel.dismissChangePopup()
+            viewModel.dismissChangePopup(speakOnDismiss = false)
             viewModel.dismissMasterReset()
         }
     }
 
-    // Initialize Firebase if config is loaded and has JSON payload
-    LaunchedEffect(storeConfig) {
+    // Initialize Firebase & real-time cloud sync if config is loaded and has JSON payload
+    LaunchedEffect(storeConfig?.googleServicesJson) {
         storeConfig?.let {
             if (it.googleServicesJson.isNotBlank()) {
-                com.example.util.FirebaseSyncManager.initialize(context, it.googleServicesJson)
+                viewModel.startCloudRealtimeSyncIfReady(it.googleServicesJson)
             }
         }
     }

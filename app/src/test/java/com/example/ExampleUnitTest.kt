@@ -397,16 +397,27 @@ class ExampleUnitTest {
             LicenseManager.normalizeHttpsGatewayUrl("webhook.mrapro.site")
         )
         assertEquals(
-            "https://webhook.mrapro.site/api/license",
-            LicenseManager.normalizeHttpsGatewayUrl(" https://webhook.mrapro.site/api/license ")
+            "https://webhook.mrapro.site",
+            LicenseManager.normalizeHttpsGatewayUrl(" \"https://webhook.mrapro.site/admin\" ")
+        )
+        assertEquals(
+            "https://webhook.mrapro.site",
+            LicenseManager.normalizeHttpsGatewayUrl("https://webhook.mrapro.site/api/license/request")
+        )
+        assertEquals(
+            "https://webhook.mrapro.site",
+            LicenseManager.normalizeHttpsGatewayUrl("https://webhook.mrapro.site/api/license")
         )
         assertNull(LicenseManager.normalizeHttpsGatewayUrl("http://webhook.mrapro.site"))
         assertNull(LicenseManager.normalizeHttpsGatewayUrl(""))
 
         val base = LicenseManager.normalizeHttpsGatewayUrl("https://webhook.mrapro.site/")!!
-        assertEquals("https://webhook.mrapro.site/api/license/session", LicenseManager.buildSessionEndpoint(base))
+        assertEquals("https://webhook.mrapro.site/health", LicenseManager.buildHealthEndpoint(base))
         assertEquals("https://webhook.mrapro.site/api/license/request", LicenseManager.buildRequestEndpoint(base))
-        assertEquals("https://webhook.mrapro.site/api/license/verify", LicenseManager.buildVerifyEndpoint(base))
         assertEquals("https://webhook.mrapro.site/api/license/status", LicenseManager.buildStatusEndpoint(base))
+        assertEquals(
+            "https://webhook.mrapro.site/api/license/status?device_id=KSR-B250-B0B5",
+            LicenseManager.buildStatusQueryUrl(base, "ksr-b250-b0b5")
+        )
     }
 }

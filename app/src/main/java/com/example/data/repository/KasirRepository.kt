@@ -11,6 +11,7 @@ import com.example.data.model.Transaction
 import com.example.data.model.TransactionItem
 import com.example.data.model.TransactionWithItems
 import kotlinx.coroutines.flow.Flow
+import java.util.concurrent.atomic.AtomicLong
 
 class KasirRepository(
     private val categoryDao: CategoryDao,
@@ -18,14 +19,36 @@ class KasirRepository(
     private val transactionDao: TransactionDao,
     private val storeConfigDao: StoreConfigDao
 ) {
+    private val lastGeneratedId = AtomicLong(0L)
+
+    fun nextUniqueCloudId(): Long {
+        while (true) {
+            val prev = lastGeneratedId.get()
+            val candidate = maxOf(System.currentTimeMillis(), prev + 1L)
+            if (lastGeneratedId.compareAndSet(prev, candidate)) {
+                return candidate
+            }
+        }
+    }
+
     // Categories
     val allCategories: Flow<List<Category>> = categoryDao.getAllCategories()
 
     suspend fun insertCategory(category: Category): Long {
-        val id = categoryDao.insertCategory(category)
-        val synced = if (category.id == 0L) category.copy(id = id) else category
+        val target = if (category.id == 0L && com.example.util.FirebaseSyncManager.isReady()) {
+            category.copy(id = nextUniqueCloudId())
+        } else category
+        val id = categoryDao.insertCategory(target)
+        val synced = if (target.id == 0L) target.copy(id = id) else target
         com.example.util.FirebaseSyncManager.syncCategory(synced)
         return id
+    }
+
+    suspend fun replaceCategoriesFromCloud(categories: List<Category>) {
+        categoryDao.deleteAllCategories()
+        if (categories.isNotEmpty()) {
+            categoryDao.insertCategories(categories)
+        }
     }
 
     suspend fun updateCategory(category: Category) {
@@ -53,10 +76,20 @@ class KasirRepository(
     suspend fun getProductById(id: Long): Product? = productDao.getProductById(id)
 
     suspend fun insertProduct(product: Product): Long {
-        val id = productDao.insertProduct(product)
-        val synced = if (product.id == 0L) product.copy(id = id) else product
+        val target = if (product.id == 0L && com.example.util.FirebaseSyncManager.isReady()) {
+            product.copy(id = nextUniqueCloudId())
+        } else product
+        val id = productDao.insertProduct(target)
+        val synced = if (target.id == 0L) target.copy(id = id) else target
         com.example.util.FirebaseSyncManager.syncProduct(synced)
         return id
+    }
+
+    suspend fun replaceProductsFromCloud(products: List<Product>) {
+        productDao.deleteAllProducts()
+        if (products.isNotEmpty()) {
+            productDao.insertProducts(products)
+        }
     }
 
     suspend fun updateProduct(product: Product) {
@@ -123,7 +156,10 @@ class KasirRepository(
         transaction: Transaction,
         items: List<TransactionItem>
     ): Long {
-        val txId = transactionDao.insertTransaction(transaction)
+        val targetTx = if (transaction.id == 0L && com.example.util.FirebaseSyncManager.isReady()) {
+            transaction.copy(id = nextUniqueCloudId())
+        } else transaction
+        val txId = transactionDao.insertTransaction(targetTx)
         val itemsWithTxId = items.map { it.copy(transactionId = txId) }
         transactionDao.insertTransactionItems(itemsWithTxId)
 
@@ -136,9 +172,21 @@ class KasirRepository(
                 }
             }
         }
-        val finalTx = if (transaction.id == 0L) transaction.copy(id = txId) else transaction
+        val finalTx = if (targetTx.id == 0L) targetTx.copy(id = txId) else targetTx
         com.example.util.FirebaseSyncManager.syncTransaction(finalTx, itemsWithTxId)
         return txId
+    }
+
+    suspend fun replaceTransactionsFromCloud(transactions: List<Pair<Transaction, List<TransactionItem>>>) {
+        transactionDao.deleteAllTransactionItems()
+        transactionDao.deleteAllTransactions()
+        for ((tx, items) in transactions) {
+            val insertedId = transactionDao.insertTransaction(tx)
+            val resolvedId = if (tx.id == 0L) insertedId else tx.id
+            if (items.isNotEmpty()) {
+                transactionDao.insertTransactionItems(items.map { it.copy(transactionId = resolvedId) })
+            }
+        }
     }
 
     suspend fun getItemsBetween(start: Long, end: Long): List<TransactionItem> =
@@ -152,5 +200,9 @@ class KasirRepository(
     suspend fun updateStoreConfig(config: StoreConfig) {
         storeConfigDao.insertOrUpdateConfig(config)
         com.example.util.FirebaseSyncManager.syncStoreConfig(config)
+    }
+
+    suspend fun updateStoreConfigLocalOnly(config: StoreConfig) {
+        storeConfigDao.insertOrUpdateConfig(config)
     }
 }

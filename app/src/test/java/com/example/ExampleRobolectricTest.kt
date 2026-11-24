@@ -104,6 +104,28 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `go webhook request payload and status query url match server contract`() {
+        val raw = LicenseManager.buildLicenseRequestPayload("ksr-b250-b0b5", "Warung Maju")
+        val json = org.json.JSONObject(raw)
+        assertEquals("KSR-B250-B0B5", json.getString("device_id"))
+        assertEquals("Warung Maju", json.getString("business_name"))
+
+        val blankStoreJson = org.json.JSONObject(LicenseManager.buildLicenseRequestPayload("KSR-B250-B0B5", ""))
+        assertEquals("-", blankStoreJson.getString("business_name"))
+
+        assertEquals(
+            "https://webhook.mrapro.site/api/license/status?device_id=KSR-B250-B0B5",
+            LicenseManager.buildStatusQueryUrl("https://webhook.mrapro.site", "KSR-B250-B0B5")
+        )
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val overridden = LicenseManager.setCustomWebhookBaseUrl(context, "webhook.mrapro.site/admin")
+        assertEquals("https://webhook.mrapro.site", overridden)
+        assertEquals("https://webhook.mrapro.site", LicenseManager.getEffectiveGatewayBaseUrl(context))
+        LicenseManager.setCustomWebhookBaseUrl(context, "")
+    }
+
+    @Test
     fun `receipt bitmap scales cleanly for notes, multi-line store headers, and long footers`() {
         val baseConfig = StoreConfig(
             storeName = "AYAM GORENG",
@@ -225,5 +247,174 @@ class ExampleRobolectricTest {
         val csvContent = csvFiles.first().readText(Charsets.UTF_8)
         assertTrue(csvContent.contains("INV-EXCEL-001"))
         assertFalse(csvContent.contains("30000.0"))
+    }
+
+    @Test
+    fun `firebase sync manager dynamically initializes, switches configs, rejects invalid json, and disconnects`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.util.FirebaseSyncManager.disconnect(context)
+
+        val firstJson = """
+            {
+              "project_info": {
+                "project_number": "111222333444",
+                "project_id": "demo-pos-first",
+                "storage_bucket": "demo-pos-first.firebasestorage.app"
+              },
+              "client": [
+                {
+                  "client_info": {
+                    "mobilesdk_app_id": "1:111222333444:android:aabbccdd11223344",
+                    "android_client_info": {
+                      "package_name": "com.example.otherapp"
+                    }
+                  },
+                  "api_key": [
+                    {
+                      "current_key": "AIzaSyDummyTestKeyOne1234567890"
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val firstResult = com.example.util.FirebaseSyncManager.initializeDetailed(context, firstJson)
+        assertTrue(firstResult.success)
+        assertEquals("demo-pos-first", firstResult.projectId)
+        assertEquals("com.example.otherapp", firstResult.clientPackageName)
+        assertTrue(com.example.util.FirebaseSyncManager.isReady())
+        assertEquals("demo-pos-first", com.example.util.FirebaseSyncManager.getActiveProjectId())
+        assertNotNull(com.example.util.FirebaseSyncManager.getFirestore())
+
+        val secondJson = """
+            {
+              "project_info": {
+                "project_number": "999888777666",
+                "project_id": "demo-pos-second",
+                "storage_bucket": "demo-pos-second.firebasestorage.app"
+              },
+              "client": [
+                {
+                  "client_info": {
+                    "mobilesdk_app_id": "1:999888777666:android:9988776655443322",
+                    "android_client_info": {
+                      "package_name": "${context.packageName}"
+                    }
+                  },
+                  "api_key": [
+                    {
+                      "current_key": "AIzaSyDummyTestKeyTwo0987654321"
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val switchResult = com.example.util.FirebaseSyncManager.initializeDetailed(context, secondJson)
+        assertTrue(switchResult.success)
+        assertEquals("demo-pos-second", switchResult.projectId)
+        assertEquals(context.packageName, switchResult.clientPackageName)
+        assertEquals("demo-pos-second", com.example.util.FirebaseSyncManager.getActiveProjectId())
+
+        val invalidResult = com.example.util.FirebaseSyncManager.initializeDetailed(context, "{invalid")
+        assertFalse(invalidResult.success)
+        assertFalse(com.example.util.FirebaseSyncManager.isReady())
+
+        com.example.util.FirebaseSyncManager.disconnect(context)
+        assertFalse(com.example.util.FirebaseSyncManager.isReady())
+        assertEquals("", com.example.util.FirebaseSyncManager.getActiveProjectId())
+    }
+
+    @Test
+    fun `merged cloud store config preserves cloud store name and local googleServicesJson`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val localCfg = StoreConfig(
+            id = 1,
+            storeName = "Warung Makan",
+            storeAddress = "Jl. Merdeka No. 45, Jakarta",
+            googleServicesJson = "{\"project_info\":{\"project_id\":\"demo-pos\"}}"
+        )
+        val cloudData = mapOf<String, Any?>(
+            "storeName" to "Esteh daun",
+            "storeAddress" to "Jl. Melati No. 10",
+            "storePhone" to "08123456789",
+            "qrisMerchantName" to "Esteh daun QRIS",
+            "googleServicesJson" to ""
+        )
+
+        val merged = com.example.util.FirebaseSyncManager.buildMergedStoreConfig(
+            context = context,
+            cloudData = cloudData,
+            localCfg = localCfg
+        )
+
+        assertEquals("Esteh daun", merged.storeName)
+        assertEquals("Jl. Melati No. 10", merged.storeAddress)
+        assertEquals("08123456789", merged.storePhone)
+        assertEquals("Esteh daun QRIS", merged.qrisMerchantName)
+        assertEquals("{\"project_info\":{\"project_id\":\"demo-pos\"}}", merged.googleServicesJson)
+    }
+
+    @Test
+    fun `cloud mirror replacement does not double deduct stock and generates unique offline ids`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(
+            context,
+            com.example.data.database.AppDatabase::class.java
+        ).allowMainThreadQueries().build()
+
+        try {
+            val repo = com.example.data.repository.KasirRepository(
+                categoryDao = db.categoryDao(),
+                productDao = db.productDao(),
+                transactionDao = db.transactionDao(),
+                storeConfigDao = db.storeConfigDao()
+            )
+
+            val id1 = repo.nextUniqueCloudId()
+            val id2 = repo.nextUniqueCloudId()
+            assertTrue(id2 > id1)
+
+            val product = com.example.data.model.Product(
+                id = 10L,
+                name = "Es Teh Daun",
+                categoryId = 2L,
+                categoryName = "Minuman",
+                price = 5000.0,
+                stock = 20
+            )
+            repo.replaceProductsFromCloud(listOf(product))
+
+            val tx = Transaction(
+                id = 100L,
+                invoiceNumber = "INV-CLOUD-100",
+                totalAmount = 15000.0,
+                totalItemsCount = 3
+            )
+            val txItem = TransactionItem(
+                transactionId = 100L,
+                productId = 10L,
+                productName = "Es Teh Daun",
+                quantity = 3,
+                pricePerUnit = 5000.0,
+                subtotal = 15000.0
+            )
+            repo.replaceTransactionsFromCloud(listOf(tx to listOf(txItem)))
+
+            // Stock must remain 20 (already reflected in Cloud product doc, not deducted again)
+            assertEquals(20, repo.getProductById(10L)?.stock)
+            assertEquals("INV-CLOUD-100", repo.getTransactionById(100L)?.transaction?.invoiceNumber)
+
+            // Disconnected FirebaseSyncManager always reports NOT_CONFIGURED
+            com.example.util.FirebaseSyncManager.disconnect(context)
+            assertEquals(
+                com.example.util.FirebaseSyncManager.CloudConnectionMode.NOT_CONFIGURED,
+                com.example.util.FirebaseSyncManager.cloudSyncState.value.mode
+            )
+        } finally {
+            db.close()
+        }
     }
 }
